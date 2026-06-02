@@ -1,0 +1,40 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.token.role == 'super_admin';
+    }
+
+    // Catalogue photos — readable by any signed-in user (customers browsing rewards),
+    // writable only by super admins (uploaded from /admin/catalogue).
+    // 5 MB cap; only image content types accepted.
+    match /catalogue/{file=**} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin()
+                   && request.resource.size < 5 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*');
+    }
+
+    // Customer-uploaded receipt photos (for in-store claim proofs, Phase 2).
+    // Each customer may write to their own folder; super admins read/write all.
+    match /receipts/{uid}/{file=**} {
+      allow read: if (isSignedIn() && request.auth.uid == uid) || isSuperAdmin();
+      allow create: if isSignedIn()
+                    && request.auth.uid == uid
+                    && request.resource.size < 5 * 1024 * 1024
+                    && request.resource.contentType.matches('image/.*');
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Everything else: deny by default.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,74 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.token.role == 'super_admin';
+    }
+
+    // Admins (optional profile docs)
+    match /users/{uid} {
+      allow read: if isSelf(uid) || isSuperAdmin();
+      allow write: if isSuperAdmin();
+    }
+
+    // Customers
+    match /customers/{uid} {
+      allow read: if isSelf(uid) || isSuperAdmin();
+      allow create: if isSelf(uid);
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Catalogue — any signed-in user can read; super admins write.
+    match /catalogue/{itemId} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
+    // Claims (in-store receipt submissions awaiting approval).
+    // Customers can create PENDING claims for themselves and read their own;
+    // super admins read all and update status (approve/reject).
+    match /claims/{claimId} {
+      allow read: if isSuperAdmin()
+                  || (isSignedIn() && resource.data.customer_id == request.auth.uid);
+      allow create: if isSignedIn()
+                    && request.resource.data.customer_id == request.auth.uid
+                    && request.resource.data.status == 'PENDING'
+                    && request.resource.data.claimed_amount is number
+                    && request.resource.data.claimed_amount >= 10;
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Points batches (created server-side / admin-side when a claim is approved
+    // or a Shopify webhook fires). Customers only read their own.
+    match /points_batches/{batchId} {
+      allow read: if isSuperAdmin()
+                  || (isSignedIn() && resource.data.customer_id == request.auth.uid);
+      allow write: if isSuperAdmin();
+    }
+
+    // Redemptions (customer spends points). Customer can create their own;
+    // super admins read all and fulfill.
+    match /redemptions/{redemptionId} {
+      allow read: if isSuperAdmin()
+                  || (isSignedIn() && resource.data.customer_id == request.auth.uid);
+      allow create: if isSignedIn()
+                    && request.resource.data.customer_id == request.auth.uid;
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Fraud alerts — super admin only.
+    match /fraud_alerts/{alertId} {
+      allow read, write: if isSuperAdmin();
+    }
+  }
+}

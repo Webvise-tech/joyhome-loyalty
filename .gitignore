@@ -1,0 +1,38 @@
+.DS_Store
+.idea/
+.vscode/
+
+# Don't track per-project deps from the root; each subproject manages its own
+**/node_modules
+**/vendor
+
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+**/.env.*.local
+!**/.env.example
+
+# Laravel
+backend/storage/*.key
+backend/storage/logs/*
+backend/storage/framework/cache/*
+backend/storage/framework/sessions/*
+backend/storage/framework/views/*
+backend/bootstrap/cache/*.php
+backend/database/*.sqlite
+
+# Build output
+frontend/dist
+backend/public/build
+
+# Firebase
+.firebase/
+*-debug.log
+firebase-debug.log
+
+# OS
+.DS_Store
+Thumbs.db
