@@ -32,6 +32,8 @@ backend/public/build
 .firebase/
 *-debug.log
 firebase-debug.log
+**/firebase-service-account.json
+**/service-account*.json
 
 # OS
 .DS_Store
