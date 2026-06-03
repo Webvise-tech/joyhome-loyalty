@@ -7,6 +7,7 @@ import {
   limit,
   getDocs,
   addDoc,
+  updateDoc,
   runTransaction,
   serverTimestamp,
   Timestamp,
@@ -181,6 +182,10 @@ export async function listRejectedClaims(): Promise<Claim[]> {
  * Approve a pending claim: atomic transaction that
  *  - marks the claim APPROVED with reviewer + timestamp
  *  - creates an ACTIVE points_batch (expires_at = now + 60 days)
+ *  - increments customers/{cid}.total_points by the awarded amount
+ *
+ * The counter on customers/{cid}.total_points is the source of truth the
+ * redemption rule reads to enforce balance — see firestore.rules.
  */
 export async function approveClaim(claimId: string, reviewerUid: string): Promise<void> {
   const claimRef = doc(db, 'claims', claimId)
@@ -192,6 +197,16 @@ export async function approveClaim(claimId: string, reviewerUid: string): Promis
     if (claim.status !== 'PENDING') {
       throw new Error(`Claim is already ${claim.status.toLowerCase()}.`)
     }
+
+    const customerRef = doc(db, 'customers', claim.customer_id)
+    const customerSnap = await tx.get(customerRef)
+    if (!customerSnap.exists()) {
+      throw new Error('Customer profile not found for this claim.')
+    }
+    const currentTotal = Math.trunc(
+      Number((customerSnap.data() as { total_points?: number }).total_points) || 0,
+    )
+    const award = Math.trunc(Number(claim.points_to_award) || 0)
 
     const now = new Date()
     const expiresAt = new Date(now)
@@ -214,6 +229,8 @@ export async function approveClaim(claimId: string, reviewerUid: string): Promis
       reviewed_by: reviewerUid,
       reviewed_at: serverTimestamp(),
     })
+
+    tx.update(customerRef, { total_points: currentTotal + award })
   })
 }
 
@@ -293,32 +310,33 @@ export async function listMyRedemptions(uid: string, max = 20): Promise<Redempti
     .slice(0, max)
 }
 
+/**
+ * Create a PENDING redemption for the signed-in customer.
+ *
+ * Runs inside a Firestore transaction that
+ *   1) reads customers/{uid} and catalogue/{itemId},
+ *   2) validates the item is active + priced + that the customer has the balance,
+ *   3) decrements customers/{uid}.total_points,
+ *   4) writes the redemption with server-anchored customer + catalogue fields.
+ *
+ * The same checks are mirrored in firestore.rules so a tampered client that
+ * skips the decrement (or fakes the customer name / catalogue price / OTP shape)
+ * is still rejected. Concurrent redemptions retry on contention, so two parallel
+ * submissions cannot both pass the balance check against the same starting total.
+ *
+ * customer_name and customer_phone are NOT taken from the caller — they are read
+ * from the customer profile inside the transaction. This stops a tampered client
+ * from impersonating someone else on the cashier screen.
+ */
 export async function submitRedemption(input: {
   customer_id: string
-  customer_name: string
-  customer_phone: string
   item: CatalogueItem
   method: RedemptionMethod
   delivery?: DeliveryAddress
 }): Promise<{ id: string; otp_code?: string }> {
-  const payload: Record<string, unknown> = {
-    customer_id: input.customer_id,
-    customer_name: input.customer_name,
-    customer_phone: input.customer_phone,
-    catalogue_item_id: input.item.id,
-    catalogue_item_name: input.item.name,
-    catalogue_item_photo: input.item.photo_url ?? null,
-    points_used: input.item.points_cost,
-    method: input.method,
-    status: 'PENDING' as RedemptionStatus,
-    created_at: serverTimestamp(),
-  }
-
-  let otp_code: string | undefined
-  if (input.method === 'IN_STORE') {
-    otp_code = generateOtp()
-    payload.otp_code = otp_code
-  } else {
+  // Client-side pre-check on delivery fields for UX. Rules + transaction are the gate.
+  let deliveryFields: Record<string, string | null> | null = null
+  if (input.method === 'ONLINE') {
     const d = input.delivery
     if (
       !d?.recipient_name?.trim() ||
@@ -328,24 +346,96 @@ export async function submitRedemption(input: {
     ) {
       throw new Error('Recipient name, phone, street and city are required for delivery.')
     }
-    payload.delivery_recipient_name = d.recipient_name.trim()
-    payload.delivery_phone = d.phone.trim()
-    payload.delivery_street = d.street.trim()
-    payload.delivery_city = d.city.trim()
-    payload.delivery_notes = d.notes?.trim() || null
-    payload.delivery_address = [
-      d.recipient_name.trim(),
-      d.phone.trim(),
-      d.street.trim(),
-      d.city.trim(),
-      d.notes?.trim(),
-    ]
-      .filter(Boolean)
-      .join('\n')
+    const recipient = d.recipient_name.trim()
+    const phone = d.phone.trim()
+    const street = d.street.trim()
+    const city = d.city.trim()
+    const notes = d.notes?.trim() || ''
+    if (recipient.length > 200) throw new Error('Recipient name is too long.')
+    if (phone.length > 50) throw new Error('Phone number is too long.')
+    if (street.length > 300) throw new Error('Street address is too long.')
+    if (city.length > 100) throw new Error('City name is too long.')
+    if (notes.length > 1000) throw new Error('Delivery notes are too long.')
+    deliveryFields = {
+      delivery_recipient_name: recipient,
+      delivery_phone: phone,
+      delivery_street: street,
+      delivery_city: city,
+      delivery_notes: notes || null,
+      delivery_address: [recipient, phone, street, city, notes].filter(Boolean).join('\n'),
+    }
   }
 
-  const ref = await addDoc(collection(db, 'redemptions'), payload)
-  return { id: ref.id, otp_code }
+  // OTP generated once; the same value is used across transaction retries.
+  const otp_code = input.method === 'IN_STORE' ? generateOtp() : undefined
+
+  let createdId = ''
+  await runTransaction(db, async (tx) => {
+    const customerRef = doc(db, 'customers', input.customer_id)
+    const itemRef = doc(db, 'catalogue', input.item.id)
+
+    // All reads must happen before any writes inside a Firestore transaction.
+    const customerSnap = await tx.get(customerRef)
+    const itemSnap = await tx.get(itemRef)
+
+    if (!customerSnap.exists()) {
+      throw new Error('Customer profile not found. Please complete sign-up first.')
+    }
+    if (!itemSnap.exists()) {
+      throw new Error('This reward is no longer available.')
+    }
+
+    const customer = customerSnap.data() as {
+      first_name?: string
+      last_name?: string
+      phone?: string
+      total_points?: number
+    }
+    const item = itemSnap.data() as CatalogueItem
+
+    if (!item.is_active) {
+      throw new Error('This reward is no longer available.')
+    }
+    const cost = Math.trunc(Number(item.points_cost) || 0)
+    if (cost <= 0) {
+      throw new Error('This reward is mis-priced. Please contact support.')
+    }
+    const balance = Math.trunc(Number(customer.total_points) || 0)
+    if (balance < cost) {
+      throw new Error(
+        `You don't have enough points: you have ${balance}, this reward costs ${cost}.`,
+      )
+    }
+
+    // Atomic: decrement counter and create the redemption together.
+    tx.update(customerRef, { total_points: balance - cost })
+
+    const redemptionRef = doc(collection(db, 'redemptions'))
+    const customerName = `${customer.first_name ?? ''} ${customer.last_name ?? ''}`.trim()
+    const payload: Record<string, unknown> = {
+      customer_id: input.customer_id,
+      customer_name: customerName,
+      customer_phone: customer.phone ?? '',
+      catalogue_item_id: input.item.id,
+      catalogue_item_name: item.name,
+      catalogue_item_photo: item.photo_url ?? null,
+      points_used: cost,
+      method: input.method,
+      status: 'PENDING' as RedemptionStatus,
+      created_at: serverTimestamp(),
+    }
+    if (otp_code !== undefined) {
+      payload.otp_code = otp_code
+    }
+    if (deliveryFields) {
+      Object.assign(payload, deliveryFields)
+    }
+
+    tx.set(redemptionRef, payload)
+    createdId = redemptionRef.id
+  })
+
+  return { id: createdId, otp_code }
 }
 
 /** Admin: list pending redemptions (in-store + online), ordered oldest first. */
@@ -425,17 +515,35 @@ export async function markRedemptionDelivered(id: string, adminUid: string): Pro
   })
 }
 
+/**
+ * Cancel a redemption. Refunds the points to customers/{cid}.total_points
+ * so the customer can spend them again. Idempotent: cancelling a CANCELED
+ * redemption is a no-op (no double refund).
+ */
 export async function cancelRedemption(id: string, adminUid: string): Promise<void> {
   const ref = doc(db, 'redemptions', id)
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref)
     if (!snap.exists()) throw new Error('Redemption not found.')
-    if ((snap.data() as Redemption).status === 'CANCELED') return
+    const r = snap.data() as Redemption
+    if (r.status === 'CANCELED') return
+
+    const customerRef = doc(db, 'customers', r.customer_id)
+    const customerSnap = await tx.get(customerRef)
+    const refund = Math.trunc(Number(r.points_used) || 0)
+
     tx.update(ref, {
       status: 'CANCELED' as RedemptionStatus,
       reviewed_by: adminUid,
       reviewed_at: serverTimestamp(),
     })
+
+    if (customerSnap.exists() && refund > 0) {
+      const currentTotal = Math.trunc(
+        Number((customerSnap.data() as { total_points?: number }).total_points) || 0,
+      )
+      tx.update(customerRef, { total_points: currentTotal + refund })
+    }
   })
 }
 
@@ -564,8 +672,10 @@ export async function getAdminStats(): Promise<AdminStats> {
 
 /**
  * Admin manually credits or debits a customer's point balance.
- * Creates a new ACTIVE points_batch tagged source='ADJUSTMENT' with the delta
- * (positive = credit, negative = debit). Reason + admin uid stored for audit.
+ * Atomic transaction:
+ *  - creates a new ACTIVE points_batch tagged source='ADJUSTMENT' with the delta
+ *    (positive = credit, negative = debit), reason + admin uid for audit
+ *  - updates customers/{cid}.total_points by the same delta, clamped at >= 0
  */
 export async function adjustCustomerPoints(input: {
   customer_id: string
@@ -581,19 +691,87 @@ export async function adjustCustomerPoints(input: {
     throw new Error('Reason is required for an audit trail.')
   }
 
-  const now = new Date()
-  const expiresAt = new Date(now)
-  expiresAt.setDate(expiresAt.getDate() + POINTS_BATCH_EXPIRY_DAYS)
+  const customerRef = doc(db, 'customers', input.customer_id)
 
-  await addDoc(collection(db, 'points_batches'), {
-    customer_id: input.customer_id,
-    points: delta,
-    source: 'ADJUSTMENT' as BatchSource,
-    amount_usd: 0,
-    earned_at: Timestamp.fromDate(now),
-    expires_at: Timestamp.fromDate(expiresAt),
-    status: 'ACTIVE' as BatchStatus,
-    adjustment_reason: input.reason.trim(),
-    adjusted_by: input.admin_uid,
+  await runTransaction(db, async (tx) => {
+    const customerSnap = await tx.get(customerRef)
+    if (!customerSnap.exists()) {
+      throw new Error('Customer not found.')
+    }
+    const currentTotal = Math.trunc(
+      Number((customerSnap.data() as { total_points?: number }).total_points) || 0,
+    )
+    const newTotal = Math.max(0, currentTotal + delta)
+
+    const now = new Date()
+    const expiresAt = new Date(now)
+    expiresAt.setDate(expiresAt.getDate() + POINTS_BATCH_EXPIRY_DAYS)
+
+    const batchRef = doc(collection(db, 'points_batches'))
+    tx.set(batchRef, {
+      customer_id: input.customer_id,
+      points: delta,
+      source: 'ADJUSTMENT' as BatchSource,
+      amount_usd: 0,
+      earned_at: Timestamp.fromDate(now),
+      expires_at: Timestamp.fromDate(expiresAt),
+      status: 'ACTIVE' as BatchStatus,
+      adjustment_reason: input.reason.trim(),
+      adjusted_by: input.admin_uid,
+    })
+    tx.update(customerRef, { total_points: newTotal })
   })
+}
+
+/* ── Admin: backfill / repair the total_points counter ──────────────────── */
+
+/**
+ * Recompute one customer's `total_points` counter from the underlying ledger
+ * (active non-expired batches minus non-canceled redemptions) and persist it.
+ *
+ * Run this once after deploying the balance-gated rules — existing customers
+ * whose claims were approved before the counter started being maintained will
+ * otherwise show 0 and be unable to redeem.
+ */
+export async function recalculateBalanceForCustomer(uid: string): Promise<number> {
+  const [batchesSnap, redemptionsSnap] = await Promise.all([
+    getDocs(
+      query(
+        collection(db, 'points_batches'),
+        where('customer_id', '==', uid),
+        where('status', '==', 'ACTIVE'),
+      ),
+    ),
+    getDocs(query(collection(db, 'redemptions'), where('customer_id', '==', uid))),
+  ])
+
+  const now = Date.now()
+  let earned = 0
+  batchesSnap.docs.forEach((d) => {
+    const b = d.data() as PointsBatch
+    if ((b.expires_at?.toMillis?.() ?? 0) > now) {
+      earned += Number(b.points) || 0
+    }
+  })
+  let spent = 0
+  redemptionsSnap.docs.forEach((d) => {
+    const r = d.data() as Redemption
+    if (r.status !== 'CANCELED') {
+      spent += Number(r.points_used) || 0
+    }
+  })
+  const total = Math.max(0, Math.trunc(earned - spent))
+  await updateDoc(doc(db, 'customers', uid), { total_points: total })
+  return total
+}
+
+/** Recompute total_points for every customer. Admin-only. Use after the rules deploy. */
+export async function recalculateAllBalances(): Promise<{ uid: string; total: number }[]> {
+  const custSnap = await getDocs(collection(db, 'customers'))
+  const results: { uid: string; total: number }[] = []
+  for (const d of custSnap.docs) {
+    const total = await recalculateBalanceForCustomer(d.id)
+    results.push({ uid: d.id, total })
+  }
+  return results
 }

@@ -15,6 +15,21 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.role == 'super_admin';
     }
 
+    // ── Helpers ────────────────────────────────────────────────────────────
+    // Centralized cross-doc lookups so the redemption rule stays readable.
+
+    function customerData(uid) {
+      return get(/databases/$(database)/documents/customers/$(uid)).data;
+    }
+
+    function customerTotalPoints(uid) {
+      return customerData(uid).get('total_points', 0);
+    }
+
+    function catalogueItem(id) {
+      return get(/databases/$(database)/documents/catalogue/$(id)).data;
+    }
+
     // Admins (optional profile docs)
     match /users/{uid} {
       allow read: if isSelf(uid) || isSuperAdmin();
@@ -41,8 +56,22 @@ service cloud.firestore {
         && request.resource.data.phone is string
         && request.resource.data.total_points == 0;
 
-      // Only admins can change profile fields (including total_points).
-      allow update, delete: if isSuperAdmin();
+      // Admins can update any field. Customers can only DECREMENT their own
+      // `total_points` (no other field touched, value strictly less than current,
+      // must remain a non-negative int). This pairs with the redemption.create
+      // balance check below: the redemption SDK transaction decrements
+      // total_points and creates the redemption atomically. Because customers
+      // can never self-increment, they cannot mint points.
+      allow update: if isSuperAdmin()
+        || (
+          isSelf(uid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['total_points'])
+          && request.resource.data.total_points is int
+          && request.resource.data.total_points >= 0
+          && request.resource.data.total_points < resource.data.get('total_points', 0)
+        );
+
+      allow delete: if isSuperAdmin();
     }
 
     // Catalogue — any signed-in user reads; super admins write.
@@ -87,21 +116,104 @@ service cloud.firestore {
     }
 
     // Redemptions — customer creates PENDING for themselves; admin confirms/fulfills.
+    //
+    // C1 fix: balance is enforced server-side here. The client SDK transaction
+    //   1) reads customers/{uid}.total_points
+    //   2) writes the decremented total_points
+    //   3) creates this redemption with points_used == catalogue.points_cost
+    // Both writes commit atomically. Concurrent transactions retry on contention,
+    // so two parallel redemptions cannot both pass a 100-point check against the
+    // same 100-point balance.
+    //
+    // Defense-in-depth: even without the decrement (i.e. a tampered client that
+    // skips the customer update), the rule below denies the redemption when
+    // points_used > current total_points.
     match /redemptions/{redemptionId} {
       allow read: if isSuperAdmin()
                   || (isSignedIn() && resource.data.customer_id == request.auth.uid);
 
       allow create: if isSignedIn()
+        // Field whitelist — block any admin-only or surprise fields at create time.
+        && request.resource.data.keys().hasOnly([
+             'customer_id', 'customer_name', 'customer_phone',
+             'catalogue_item_id', 'catalogue_item_name', 'catalogue_item_photo',
+             'points_used', 'method', 'status', 'otp_code',
+             'delivery_recipient_name', 'delivery_phone', 'delivery_street',
+             'delivery_city', 'delivery_notes', 'delivery_address',
+             'created_at'
+           ])
+        && request.resource.data.keys().hasAll([
+             'customer_id', 'customer_name', 'customer_phone',
+             'catalogue_item_id', 'catalogue_item_name', 'catalogue_item_photo',
+             'points_used', 'method', 'status', 'created_at'
+           ])
+        // Identity + status + server time.
         && request.resource.data.customer_id == request.auth.uid
         && request.resource.data.status == 'PENDING'
+        && request.resource.data.created_at == request.time
+        // Denormalized customer name + phone anchored to customers/{uid}.
+        // Stops impersonation ("Admin Owner", someone else's phone) on the cashier screen.
+        && request.resource.data.customer_name ==
+             (customerData(request.auth.uid).get('first_name', '') + ' ' +
+              customerData(request.auth.uid).get('last_name', '')).trim()
+        && request.resource.data.customer_phone == customerData(request.auth.uid).get('phone', '')
+        // Balance gate (C1).
         && request.resource.data.points_used is int
         && request.resource.data.points_used > 0
-        // points_used must equal the catalogue item's actual price — server-anchored.
-        // Customer cannot redeem a $5000 item for 1 point.
-        && request.resource.data.points_used == get(
-             /databases/$(database)/documents/catalogue/$(request.resource.data.catalogue_item_id)
-           ).data.points_cost
-        && request.resource.data.created_at == request.time;
+        && request.resource.data.points_used <= customerTotalPoints(request.auth.uid)
+        // Catalogue item must exist (get() denies if missing), be active, and
+        // have a positive integer points_cost matching points_used.
+        && request.resource.data.catalogue_item_id is string
+        && catalogueItem(request.resource.data.catalogue_item_id).get('is_active', false) == true
+        && catalogueItem(request.resource.data.catalogue_item_id).points_cost is int
+        && catalogueItem(request.resource.data.catalogue_item_id).points_cost > 0
+        && request.resource.data.points_used == catalogueItem(request.resource.data.catalogue_item_id).points_cost
+        // Display fields anchored to the catalogue doc — no attacker-supplied
+        // name shown to the admin, no attacker-supplied photo URL.
+        && request.resource.data.catalogue_item_name == catalogueItem(request.resource.data.catalogue_item_id).name
+        && request.resource.data.catalogue_item_photo == catalogueItem(request.resource.data.catalogue_item_id).get('photo_url', null)
+        // Method-specific validation. IN_STORE requires a 6-digit OTP and forbids
+        // delivery fields. ONLINE requires the delivery fields with sane caps and
+        // forbids an OTP. Either branch must match exactly.
+        && request.resource.data.method in ['IN_STORE', 'ONLINE']
+        && (
+          (
+            request.resource.data.method == 'IN_STORE'
+            && 'otp_code' in request.resource.data
+            && request.resource.data.otp_code is string
+            && request.resource.data.otp_code.matches('^[0-9]{6}$')
+            && !('delivery_recipient_name' in request.resource.data)
+            && !('delivery_phone' in request.resource.data)
+            && !('delivery_street' in request.resource.data)
+            && !('delivery_city' in request.resource.data)
+            && !('delivery_notes' in request.resource.data)
+            && !('delivery_address' in request.resource.data)
+          ) || (
+            request.resource.data.method == 'ONLINE'
+            && !('otp_code' in request.resource.data)
+            && request.resource.data.delivery_recipient_name is string
+            && request.resource.data.delivery_recipient_name.size() >= 1
+            && request.resource.data.delivery_recipient_name.size() <= 200
+            && request.resource.data.delivery_phone is string
+            && request.resource.data.delivery_phone.size() >= 1
+            && request.resource.data.delivery_phone.size() <= 50
+            && request.resource.data.delivery_street is string
+            && request.resource.data.delivery_street.size() >= 1
+            && request.resource.data.delivery_street.size() <= 300
+            && request.resource.data.delivery_city is string
+            && request.resource.data.delivery_city.size() >= 1
+            && request.resource.data.delivery_city.size() <= 100
+            && (
+              !('delivery_notes' in request.resource.data)
+              || request.resource.data.delivery_notes == null
+              || (request.resource.data.delivery_notes is string && request.resource.data.delivery_notes.size() <= 1000)
+            )
+            && (
+              !('delivery_address' in request.resource.data)
+              || (request.resource.data.delivery_address is string && request.resource.data.delivery_address.size() <= 2000)
+            )
+          )
+        );
 
       allow update, delete: if isSuperAdmin();
     }

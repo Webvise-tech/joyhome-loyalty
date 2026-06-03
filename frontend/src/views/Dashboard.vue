@@ -102,10 +102,10 @@ async function submitRedeemForm() {
   redeemError.value = null
   const itemName = redeemItem.value.name
   try {
+    // customer_name + customer_phone are sourced from customers/{uid} inside the
+    // transaction (and enforced by firestore.rules), so we no longer pass them.
     const { otp_code } = await submitRedemption({
       customer_id: auth.user.uid,
-      customer_name: `${auth.customer.first_name} ${auth.customer.last_name}`.trim(),
-      customer_phone: auth.customer.phone,
       item: redeemItem.value,
       method: redeemMethod.value,
       delivery:
