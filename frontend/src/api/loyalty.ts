@@ -60,7 +60,10 @@ export interface PointsBatch {
 }
 
 export type RedemptionMethod = 'IN_STORE' | 'ONLINE'
-export type RedemptionStatus = 'PENDING' | 'CONFIRMED' | 'DELIVERED' | 'CANCELED'
+export type RedemptionStatus = 'PENDING' | 'CONFIRMED' | 'DELIVERED' | 'CANCELED' | 'EXPIRED'
+
+/** In-store pickup codes are valid for this many hours after creation. */
+export const REDEMPTION_OTP_EXPIRY_HOURS = 48
 
 export interface DeliveryAddress {
   recipient_name: string
@@ -80,7 +83,12 @@ export interface Redemption {
   catalogue_item_photo: string | null
   points_used: number
   method: RedemptionMethod
-  otp_code?: string
+  /**
+   * SHA-256 hex of the 6-digit pickup code. The plaintext code is shown to
+   * the customer once at submission and never persisted. The admin's "confirm
+   * OTP" flow hashes the entered code and queries this field.
+   */
+  otp_hash?: string
   /** Formatted multi-line string for display. */
   delivery_address?: string
   /** Structured fields (newer redemptions). */
@@ -299,6 +307,53 @@ function generateOtp(): string {
   return String(100000 + (arr[0] % 900000))
 }
 
+/**
+ * The moment an in-store pickup code stops being valid:
+ * created_at + REDEMPTION_OTP_EXPIRY_HOURS. Null for non-IN_STORE or if the
+ * created_at timestamp isn't readable yet (just-written serverTimestamp).
+ */
+export function redemptionOtpExpiresAt(r: Redemption): Date | null {
+  if (r.method !== 'IN_STORE') return null
+  const createdMs = r.created_at?.toMillis?.()
+  if (!createdMs) return null
+  return new Date(createdMs + REDEMPTION_OTP_EXPIRY_HOURS * 3600 * 1000)
+}
+
+/** True if the redemption is a PENDING in-store pickup whose OTP window has passed. */
+export function isRedemptionOtpExpired(r: Redemption, nowMs = Date.now()): boolean {
+  if (r.status !== 'PENDING' || r.method !== 'IN_STORE') return false
+  const expiresAt = redemptionOtpExpiresAt(r)
+  if (!expiresAt) return false
+  return nowMs > expiresAt.getTime()
+}
+
+/**
+ * Status to display in the UI. Returns 'EXPIRED' for a PENDING in-store pickup
+ * whose 48h window has passed, even if the Firestore doc still says PENDING
+ * (because the admin sweep hasn't run yet). For every other case, returns the
+ * persisted status unchanged.
+ */
+export function effectiveRedemptionStatus(r: Redemption, nowMs = Date.now()): RedemptionStatus {
+  return isRedemptionOtpExpired(r, nowMs) ? 'EXPIRED' : r.status
+}
+
+/**
+ * SHA-256 hex digest of a string. Used to store only the hash of the redemption
+ * OTP in Firestore — the plaintext is shown to the customer once and never
+ * persisted server-side. Determinism (no salt) is required so the admin's
+ * confirm flow can re-hash the entered code and look it up via `where()`.
+ */
+async function sha256Hex(input: string): Promise<string> {
+  const bytes = new TextEncoder().encode(input)
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  const view = new Uint8Array(digest)
+  let out = ''
+  for (let i = 0; i < view.length; i++) {
+    out += view[i].toString(16).padStart(2, '0')
+  }
+  return out
+}
+
 export async function listMyRedemptions(uid: string, max = 20): Promise<Redemption[]> {
   // Single equality filter to avoid requiring a composite index.
   // Sort + limit client-side — fine at per-customer scale.
@@ -367,7 +422,10 @@ export async function submitRedemption(input: {
   }
 
   // OTP generated once; the same value is used across transaction retries.
+  // The plaintext is returned to the caller (shown once in the UI) and only
+  // its SHA-256 hash is persisted to Firestore.
   const otp_code = input.method === 'IN_STORE' ? generateOtp() : undefined
+  const otp_hash = otp_code !== undefined ? await sha256Hex(otp_code) : undefined
 
   let createdId = ''
   await runTransaction(db, async (tx) => {
@@ -424,8 +482,8 @@ export async function submitRedemption(input: {
       status: 'PENDING' as RedemptionStatus,
       created_at: serverTimestamp(),
     }
-    if (otp_code !== undefined) {
-      payload.otp_code = otp_code
+    if (otp_hash !== undefined) {
+      payload.otp_hash = otp_hash
     }
     if (deliveryFields) {
       Object.assign(payload, deliveryFields)
@@ -468,9 +526,12 @@ export async function confirmInStoreOtp(code: string, adminUid: string): Promise
     throw new Error('Code must be 6 digits.')
   }
 
+  // The stored field is the SHA-256 hex of the OTP — hash the entered code
+  // and look it up by hash so we never have to compare plaintext.
+  const enteredHash = await sha256Hex(trimmed)
   const q = query(
     collection(db, 'redemptions'),
-    where('otp_code', '==', trimmed),
+    where('otp_hash', '==', enteredHash),
   )
   const snap = await getDocs(q)
 
@@ -486,8 +547,23 @@ export async function confirmInStoreOtp(code: string, adminUid: string): Promise
     const ref = doc(db, 'redemptions', match.id)
     const fresh = await tx.get(ref)
     if (!fresh.exists()) throw new Error('Redemption not found.')
-    if ((fresh.data() as Redemption).status !== 'PENDING') {
+    const freshData = fresh.data() as Redemption
+    if (freshData.status !== 'PENDING') {
       throw new Error('Already confirmed by someone else.')
+    }
+    // 48h expiry: if the OTP window has passed, transition the redemption to
+    // EXPIRED in this same transaction (so it leaves the pending queue and the
+    // customer's history reflects what actually happened) and surface a clear
+    // error to the cashier. Points are NOT refunded — expiry is "use it or lose it".
+    if (isRedemptionOtpExpired(freshData)) {
+      tx.update(ref, {
+        status: 'EXPIRED' as RedemptionStatus,
+        reviewed_by: adminUid,
+        reviewed_at: serverTimestamp(),
+      })
+      throw new Error(
+        `This pickup code has expired (codes are valid for ${REDEMPTION_OTP_EXPIRY_HOURS}h).`,
+      )
     }
     tx.update(ref, {
       status: 'CONFIRMED' as RedemptionStatus,
@@ -497,6 +573,55 @@ export async function confirmInStoreOtp(code: string, adminUid: string): Promise
   })
 
   return { id: match.id, ...(data as Omit<Redemption, 'id'>) }
+}
+
+/**
+ * Admin sweep: scan all PENDING IN_STORE redemptions and transition any whose
+ * 48h window has passed to EXPIRED. Points are not refunded. Returns the count
+ * of redemptions expired.
+ *
+ * Cheap to call — no-op if nothing is overdue. Intended to run at the start of
+ * the admin Redemptions page load so the pending queue is always accurate.
+ */
+export async function expireOverduePendingInStoreRedemptions(
+  adminUid: string,
+): Promise<number> {
+  const q = query(
+    collection(db, 'redemptions'),
+    where('status', '==', 'PENDING'),
+    where('method', '==', 'IN_STORE'),
+  )
+  const snap = await getDocs(q)
+  const now = Date.now()
+  const overdue = snap.docs.filter((d) =>
+    isRedemptionOtpExpired({ id: d.id, ...(d.data() as Omit<Redemption, 'id'>) }, now),
+  )
+  if (!overdue.length) return 0
+
+  // Each transition runs in its own transaction so an admin-side cancel/confirm
+  // racing with the sweep doesn't fail the whole batch.
+  let expired = 0
+  for (const d of overdue) {
+    try {
+      await runTransaction(db, async (tx) => {
+        const ref = doc(db, 'redemptions', d.id)
+        const fresh = await tx.get(ref)
+        if (!fresh.exists()) return
+        const r = fresh.data() as Redemption
+        if (r.status !== 'PENDING') return
+        if (!isRedemptionOtpExpired(r)) return
+        tx.update(ref, {
+          status: 'EXPIRED' as RedemptionStatus,
+          reviewed_by: adminUid,
+          reviewed_at: serverTimestamp(),
+        })
+      })
+      expired += 1
+    } catch {
+      // Skip and continue — a concurrent admin action transitioned this doc.
+    }
+  }
+  return expired
 }
 
 export async function markRedemptionDelivered(id: string, adminUid: string): Promise<void> {

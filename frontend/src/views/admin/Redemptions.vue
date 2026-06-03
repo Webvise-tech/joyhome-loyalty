@@ -8,6 +8,7 @@ import Pagination from '../../components/Pagination.vue'
 import {
   cancelRedemption,
   confirmInStoreOtp,
+  expireOverduePendingInStoreRedemptions,
   listRecentRedemptions,
   markRedemptionDelivered,
   type Redemption,
@@ -43,6 +44,7 @@ function statusBadge(s: Redemption['status']) {
   if (s === 'CONFIRMED') return { label: 'Confirmed', tone: 'text-clover' }
   if (s === 'DELIVERED') return { label: 'Delivered', tone: 'text-clover' }
   if (s === 'CANCELED') return { label: 'Canceled', tone: 'text-oxblood' }
+  if (s === 'EXPIRED') return { label: 'Expired', tone: 'text-oxblood' }
   return { label: 'Pending', tone: 'text-brass' }
 }
 
@@ -60,6 +62,14 @@ async function load() {
   loading.value = true
   loadError.value = null
   try {
+    // Sweep overdue in-store pickups first so the pending queue below is accurate
+    // and any 48h-stale codes show up as EXPIRED in history. Best-effort: a failure
+    // here shouldn't block loading the list.
+    if (auth.user) {
+      try {
+        await expireOverduePendingInStoreRedemptions(auth.user.uid)
+      } catch { /* surfaced on next refresh */ }
+    }
     all.value = await listRecentRedemptions(50)
   } catch (e: any) {
     const message = e?.message ?? 'Failed to load redemptions.'

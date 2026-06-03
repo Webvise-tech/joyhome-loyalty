@@ -137,7 +137,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
              'customer_id', 'customer_name', 'customer_phone',
              'catalogue_item_id', 'catalogue_item_name', 'catalogue_item_photo',
-             'points_used', 'method', 'status', 'otp_code',
+             'points_used', 'method', 'status', 'otp_hash',
              'delivery_recipient_name', 'delivery_phone', 'delivery_street',
              'delivery_city', 'delivery_notes', 'delivery_address',
              'created_at'
@@ -179,9 +179,9 @@ service cloud.firestore {
         && (
           (
             request.resource.data.method == 'IN_STORE'
-            && 'otp_code' in request.resource.data
-            && request.resource.data.otp_code is string
-            && request.resource.data.otp_code.matches('^[0-9]{6}$')
+            && 'otp_hash' in request.resource.data
+            && request.resource.data.otp_hash is string
+            && request.resource.data.otp_hash.matches('^[a-f0-9]{64}$')
             && !('delivery_recipient_name' in request.resource.data)
             && !('delivery_phone' in request.resource.data)
             && !('delivery_street' in request.resource.data)
@@ -190,7 +190,7 @@ service cloud.firestore {
             && !('delivery_address' in request.resource.data)
           ) || (
             request.resource.data.method == 'ONLINE'
-            && !('otp_code' in request.resource.data)
+            && !('otp_hash' in request.resource.data)
             && request.resource.data.delivery_recipient_name is string
             && request.resource.data.delivery_recipient_name.size() >= 1
             && request.resource.data.delivery_recipient_name.size() <= 200

@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import {
+  effectiveRedemptionStatus,
+  isRedemptionOtpExpired,
   listMyClaims,
   listMyRedemptions,
+  redemptionOtpExpiresAt,
   type Claim,
   type Redemption,
+  type RedemptionStatus,
 } from '../api/loyalty'
 
 const auth = useAuthStore()
@@ -15,16 +19,22 @@ const redemptions = ref<Redemption[]>([])
 const loading = ref(false)
 const loadError = ref<string | null>(null)
 
+// Reactive clock: ticked once a minute so the countdown labels under each
+// pending pickup re-render without requiring a navigation or refresh.
+const nowMs = ref(Date.now())
+let tickHandle: ReturnType<typeof setInterval> | null = null
+
 function claimBadge(s: Claim['status']) {
   if (s === 'APPROVED') return { label: 'Approved', tone: 'text-clover' }
   if (s === 'REJECTED') return { label: 'Rejected', tone: 'text-oxblood' }
   return { label: 'Pending', tone: 'text-brass' }
 }
 
-function redemptionBadge(s: Redemption['status']) {
+function redemptionBadge(s: RedemptionStatus) {
   if (s === 'CONFIRMED') return { label: 'Confirmed', tone: 'text-clover' }
   if (s === 'DELIVERED') return { label: 'Delivered', tone: 'text-clover' }
   if (s === 'CANCELED') return { label: 'Canceled', tone: 'text-oxblood' }
+  if (s === 'EXPIRED') return { label: 'Expired', tone: 'text-oxblood' }
   return { label: 'Pending', tone: 'text-brass' }
 }
 
@@ -35,6 +45,32 @@ function fmtDate(ts: any): string {
     month: 'short',
     year: 'numeric',
   })
+}
+
+/**
+ * "Expires in 23h 45m" / "Expires in 12m" / "Expired" — for a pending in-store
+ * pickup, returns a short countdown label relative to the reactive `nowMs`.
+ * Returns an empty string for any redemption that doesn't have an active OTP.
+ */
+function expiryLabel(r: Redemption): string {
+  if (r.status !== 'PENDING' || r.method !== 'IN_STORE') return ''
+  const expiresAt = redemptionOtpExpiresAt(r)
+  if (!expiresAt) return ''
+  const msLeft = expiresAt.getTime() - nowMs.value
+  if (msLeft <= 0) return 'Expired'
+  const totalMin = Math.floor(msLeft / 60_000)
+  const hours = Math.floor(totalMin / 60)
+  const mins = totalMin % 60
+  if (hours > 0) return `Expires in ${hours}h ${mins}m`
+  return `Expires in ${Math.max(1, mins)}m`
+}
+
+function effectiveStatus(r: Redemption): RedemptionStatus {
+  return effectiveRedemptionStatus(r, nowMs.value)
+}
+
+function isExpired(r: Redemption): boolean {
+  return isRedemptionOtpExpired(r, nowMs.value)
 }
 
 async function load() {
@@ -55,7 +91,16 @@ async function load() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  tickHandle = setInterval(() => {
+    nowMs.value = Date.now()
+  }, 60_000)
+})
+
+onBeforeUnmount(() => {
+  if (tickHandle) clearInterval(tickHandle)
+})
 </script>
 
 <template>
@@ -150,17 +195,23 @@ onMounted(load)
               {{ r.points_used }} pts
             </p>
             <p
-              v-if="r.status === 'PENDING' && r.method === 'IN_STORE' && r.otp_code"
-              class="mt-1 font-mono text-[13px] tracking-[0.25em] text-clover"
+              v-if="r.status === 'PENDING' && r.method === 'IN_STORE'"
+              class="mt-1 font-mono text-[10px] uppercase tracking-[0.18em]"
+              :class="isExpired(r) ? 'text-oxblood' : 'text-fg-mute'"
             >
-              Code: {{ r.otp_code }}
+              <template v-if="isExpired(r)">
+                Pickup code expired — points were not refunded
+              </template>
+              <template v-else>
+                Pickup code shown once at submission · {{ expiryLabel(r) }}
+              </template>
             </p>
           </div>
           <span
             class="font-mono text-[10px] uppercase tracking-[0.18em]"
-            :class="redemptionBadge(r.status).tone"
+            :class="redemptionBadge(effectiveStatus(r)).tone"
           >
-            {{ redemptionBadge(r.status).label }}
+            {{ redemptionBadge(effectiveStatus(r)).label }}
           </span>
         </li>
       </ul>
