@@ -37,6 +37,16 @@ const expiryLabel = computed(() => {
   if (!d) return null
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
 })
+const daysUntilExpiry = computed(() => {
+  const d = expiry.value
+  if (!d) return null
+  const msPerDay = 1000 * 60 * 60 * 24
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const startOfExpiry = new Date(d)
+  startOfExpiry.setHours(0, 0, 0, 0)
+  return Math.max(0, Math.round((startOfExpiry.getTime() - startOfToday.getTime()) / msPerDay))
+})
 
 // Redemption modal state
 const showRedeem = ref(false)
@@ -213,8 +223,21 @@ onMounted(loadAll)
           {{ balance }}
           <span class="ml-1 font-sans text-base font-normal text-fg-mute">pts</span>
         </p>
-        <p v-if="expiryLabel" class="mt-4 font-mono text-[11px] tracking-[0.04em] text-fg-mute">
-          Oldest batch expires {{ expiryLabel }}.
+        <p v-if="daysUntilExpiry !== null" class="mt-4 font-mono text-[11px] tracking-[0.04em] text-fg-mute">
+          <template v-if="daysUntilExpiry === 0">
+            Some of your points expire today.
+          </template>
+          <template v-else-if="daysUntilExpiry === 1">
+            Some of your points expire in <span class="text-clover">1 day</span>
+            ({{ expiryLabel }}).
+          </template>
+          <template v-else>
+            Some of your points expire in <span class="text-clover">{{ daysUntilExpiry }} days</span>
+            ({{ expiryLabel }}).
+          </template>
+        </p>
+        <p class="mt-1 font-mono text-[10px] tracking-[0.04em] text-fg-mute">
+          Points are valid for 60 days from the date they're earned.
         </p>
       </div>
     </section>
