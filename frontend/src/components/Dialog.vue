@@ -49,13 +49,17 @@ function onKeydown(e: KeyboardEvent) {
   <Teleport to="body">
     <div
       v-if="state.open"
-      class="fixed inset-0 z-[100] grid place-items-center bg-overlay/80 backdrop-blur-sm px-4 py-8"
+      class="fixed inset-0 z-[100] overflow-y-auto bg-overlay/80 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       @click.self="onBackdropClick"
       @keydown="onKeydown"
       tabindex="-1"
     >
+      <div
+        class="flex min-h-full items-start justify-center px-4 py-8 sm:items-center"
+        @click.self="onBackdropClick"
+      >
       <div class="reveal w-full max-w-md border border-surface-rim bg-surface-elev shadow-pop">
         <header v-if="state.title" class="border-b border-surface-rim px-6 py-5">
           <h2 class="font-display text-2xl font-light leading-tight text-fg">
@@ -100,6 +104,7 @@ function onKeydown(e: KeyboardEvent) {
             <span class="text-base">→</span>
           </button>
         </div>
+      </div>
       </div>
     </div>
   </Teleport>

@@ -144,7 +144,8 @@ onMounted(load)
         </p>
       </div>
 
-      <table v-else class="w-full">
+      <!-- Desktop: table -->
+      <table v-else class="hidden w-full md:table">
         <thead>
           <tr class="border-b border-surface-rim text-left">
             <th class="py-3 pr-6 font-mono text-[10px] uppercase tracking-[0.22em] text-fg-mute">Customer</th>
@@ -193,6 +194,56 @@ onMounted(load)
           </tr>
         </tbody>
       </table>
+
+      <!-- Mobile: card list -->
+      <ul v-if="pending.length" class="space-y-3 md:hidden">
+        <li
+          v-for="c in pendingPg.paged.value"
+          :key="c.id"
+          class="border border-surface-rim bg-surface-elev p-4"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-[15px] text-fg">{{ c.customer_name }}</p>
+              <p class="mt-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-fg-mute">
+                {{ fmtDateTime(c.submitted_at) }}
+              </p>
+            </div>
+            <div class="flex-shrink-0 text-right">
+              <p class="font-mono tabular-nums text-[18px] text-fg">${{ c.claimed_amount }}</p>
+              <p class="font-mono tabular-nums text-[12px] text-clover">+{{ c.points_to_award }} pts</p>
+            </div>
+          </div>
+
+          <div class="mt-3 space-y-1 border-t border-surface-rim/60 pt-3 font-mono text-[12px] text-fg-soft">
+            <p class="flex justify-between gap-2">
+              <span class="text-fg-mute">Email</span>
+              <span class="truncate">{{ c.customer_email || '—' }}</span>
+            </p>
+            <p class="flex justify-between gap-2">
+              <span class="text-fg-mute">Phone</span>
+              <span>{{ c.customer_phone || '—' }}</span>
+            </p>
+          </div>
+
+          <div class="mt-4 grid grid-cols-2 gap-3 border-t border-surface-rim/60 pt-3">
+            <button
+              class="border border-clover bg-clover px-3 py-2 font-mono text-[11px] uppercase tracking-[0.18em] text-cream transition-colors hover:bg-clover-deep disabled:opacity-50"
+              :disabled="busyId === c.id"
+              @click="approve(c)"
+            >
+              {{ busyId === c.id ? '…' : 'Approve' }}
+            </button>
+            <button
+              class="border border-surface-rim bg-transparent px-3 py-2 font-mono text-[11px] uppercase tracking-[0.18em] text-fg-soft transition-colors hover:border-oxblood hover:text-oxblood disabled:opacity-50"
+              :disabled="busyId === c.id"
+              @click="reject(c)"
+            >
+              Reject
+            </button>
+          </div>
+        </li>
+      </ul>
 
       <Pagination
         v-if="pending.length"

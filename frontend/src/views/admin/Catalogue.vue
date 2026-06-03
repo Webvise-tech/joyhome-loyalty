@@ -229,7 +229,8 @@ onMounted(loadItems)
         </p>
       </div>
 
-      <table v-else class="w-full">
+      <!-- Desktop: table -->
+      <table v-else class="hidden w-full md:table">
         <thead>
           <tr class="border-b border-surface-rim text-left">
             <th class="py-3 pr-6 font-mono text-[10px] uppercase tracking-[0.22em] text-fg-mute">Item</th>
@@ -297,6 +298,64 @@ onMounted(loadItems)
         </tbody>
       </table>
 
+      <!-- Mobile: card list -->
+      <ul v-if="items.length" class="space-y-3 md:hidden">
+        <li
+          v-for="item in itemsPg.paged.value"
+          :key="item.id"
+          class="cursor-pointer border border-surface-rim bg-surface-elev p-4 transition-colors hover:border-clover/40 active:bg-clover/5"
+          @click="openEdit(item)"
+        >
+          <div class="flex items-start gap-3">
+            <img
+              v-if="item.photo_url"
+              :src="item.photo_url"
+              :alt="item.name"
+              class="h-16 w-16 flex-shrink-0 border border-surface-rim object-cover"
+            />
+            <div
+              v-else
+              class="grid h-16 w-16 flex-shrink-0 place-items-center border border-surface-rim bg-surface text-[10px] uppercase tracking-[0.2em] text-fg-mute"
+            >
+              no img
+            </div>
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-[15px] text-fg">{{ item.name }}</p>
+              <p class="mt-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-fg-mute">
+                {{ item.category || 'Uncategorized' }}
+              </p>
+              <p class="mt-1 font-mono tabular-nums text-[14px] text-clover">
+                {{ item.points_cost }} pts
+              </p>
+            </div>
+            <span
+              class="flex-shrink-0 font-mono text-[10px] uppercase tracking-[0.18em]"
+              :class="item.is_active ? 'text-clover' : 'text-fg-mute'"
+            >
+              <span
+                class="mr-1 inline-block h-1.5 w-1.5"
+                :class="item.is_active ? 'bg-clover' : 'bg-fg-mute'"
+              />
+              {{ item.is_active ? 'Active' : 'Hidden' }}
+            </span>
+          </div>
+
+          <div class="mt-3 flex items-center justify-between gap-3 border-t border-surface-rim/60 pt-3">
+            <span class="font-mono text-[11px] text-fg-soft">
+              Stock: <span class="tabular-nums text-fg">{{ item.stock_qty }}</span>
+            </span>
+            <div class="flex items-center gap-4 font-mono text-[10px] uppercase tracking-[0.18em]">
+              <button class="text-fg-soft hover:text-clover" @click.stop="toggleActive(item)">
+                {{ item.is_active ? 'Hide' : 'Show' }}
+              </button>
+              <button class="text-fg-soft hover:text-oxblood" @click.stop="remove(item)">
+                Delete
+              </button>
+            </div>
+          </div>
+        </li>
+      </ul>
+
       <Pagination
         v-model:page="itemsPg.page.value"
         v-model:pageSize="itemsPg.pageSize.value"
@@ -311,10 +370,14 @@ onMounted(loadItems)
     <Teleport to="body">
       <div
         v-if="showForm"
-        class="fixed inset-0 z-50 grid place-items-center bg-overlay/80 backdrop-blur-sm px-4 py-8"
+        class="fixed inset-0 z-50 overflow-y-auto bg-overlay/80 backdrop-blur-sm"
         @click.self="closeForm"
       >
-        <div class="reveal w-full max-w-lg border border-surface-rim bg-surface-elev shadow-pop">
+        <div
+          class="flex min-h-full items-start justify-center px-4 py-8 sm:items-center"
+          @click.self="closeForm"
+        >
+          <div class="reveal w-full max-w-lg border border-surface-rim bg-surface-elev shadow-pop">
           <header class="border-b border-surface-rim px-6 py-5">
             <p class="font-mono text-[10px] uppercase tracking-[0.22em] text-fg-mute">Rewards</p>
             <h2 class="mt-1 font-display text-2xl font-light leading-tight text-fg">
@@ -416,6 +479,7 @@ onMounted(loadItems)
               </PrimaryButton>
             </div>
           </form>
+          </div>
         </div>
       </div>
     </Teleport>

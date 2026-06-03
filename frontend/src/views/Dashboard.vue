@@ -219,9 +219,9 @@ onMounted(loadAll)
       </div>
     </section>
 
-    <section class="reveal-child grid gap-4 sm:grid-cols-2">
+    <section class="reveal-child">
       <button
-        class="group flex items-center justify-between border border-surface-rim bg-surface-elev px-5 py-4 text-left transition-colors hover:border-clover"
+        class="group flex w-full items-center justify-between border border-surface-rim bg-surface-elev px-5 py-4 text-left transition-colors hover:border-clover"
         @click="openClaim"
       >
         <span>
@@ -232,18 +232,6 @@ onMounted(loadAll)
         </span>
         <span class="text-lg text-fg-mute transition-transform group-hover:translate-x-0.5">→</span>
       </button>
-      <a
-        href="#weekly-rewards"
-        class="group flex items-center justify-between border border-surface-rim bg-surface-elev px-5 py-4 text-left transition-colors hover:border-clover"
-      >
-        <span>
-          <span class="block font-display text-xl font-light text-fg">Redeem points</span>
-          <span class="mt-1 block font-mono text-[10px] uppercase tracking-[0.22em] text-fg-mute">
-            Browse the catalogue
-          </span>
-        </span>
-        <span class="text-lg text-fg-mute transition-transform group-hover:translate-x-0.5">→</span>
-      </a>
     </section>
 
     <!-- Catalogue grid -->

@@ -137,7 +137,8 @@ onMounted(load)
         </p>
       </div>
 
-      <table v-else class="w-full">
+      <!-- Desktop: table -->
+      <table v-else class="hidden w-full md:table">
         <thead>
           <tr class="border-b border-surface-rim text-left">
             <th class="py-3 pr-6 font-mono text-[10px] uppercase tracking-[0.22em] text-fg-mute">Customer</th>
@@ -181,6 +182,60 @@ onMounted(load)
         </tbody>
       </table>
 
+      <!-- Mobile: card list -->
+      <ul v-if="customers.length" class="space-y-3 md:hidden">
+        <li
+          v-for="c in customersPg.paged.value"
+          :key="c.uid"
+          class="cursor-pointer border border-surface-rim bg-surface-elev p-4 transition-colors hover:border-clover/40 active:bg-clover/5"
+          @click="openEdit(c)"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-[15px] text-fg">
+                {{ c.first_name }} {{ c.last_name }}
+              </p>
+              <p class="mt-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-fg-mute">
+                Joined {{ fmtJoined(c.created_at) }}
+              </p>
+            </div>
+            <div class="flex-shrink-0 text-right">
+              <p class="font-mono tabular-nums text-[18px] text-clover">{{ c.current_balance }}</p>
+              <p class="font-mono text-[9px] uppercase tracking-[0.18em] text-fg-mute">balance</p>
+            </div>
+          </div>
+
+          <div class="mt-3 space-y-1 border-t border-surface-rim/60 pt-3 font-mono text-[12px] text-fg-soft">
+            <p class="flex justify-between gap-2">
+              <span class="text-fg-mute">Email</span>
+              <span class="truncate">{{ c.email || '—' }}</span>
+            </p>
+            <p class="flex justify-between gap-2">
+              <span class="text-fg-mute">Phone</span>
+              <span>{{ c.phone || '—' }}</span>
+            </p>
+          </div>
+
+          <div class="mt-3 grid grid-cols-3 gap-2 border-t border-surface-rim/60 pt-3 text-center">
+            <div>
+              <p class="font-mono text-[9px] uppercase tracking-[0.18em] text-fg-mute">Receipts</p>
+              <p class="font-mono tabular-nums text-[13px] text-fg">{{ fmtMoney(c.receipts_total_usd) }}</p>
+              <p class="font-mono text-[9px] tracking-[0.04em] text-fg-mute">
+                {{ c.receipts_count }}×
+              </p>
+            </div>
+            <div>
+              <p class="font-mono text-[9px] uppercase tracking-[0.18em] text-fg-mute">Earned</p>
+              <p class="font-mono tabular-nums text-[13px] text-fg-soft">{{ c.points_earned }}</p>
+            </div>
+            <div>
+              <p class="font-mono text-[9px] uppercase tracking-[0.18em] text-fg-mute">Balance</p>
+              <p class="font-mono tabular-nums text-[13px] text-clover">{{ c.current_balance }}</p>
+            </div>
+          </div>
+        </li>
+      </ul>
+
       <Pagination
         v-model:page="customersPg.page.value"
         v-model:pageSize="customersPg.pageSize.value"
@@ -195,9 +250,13 @@ onMounted(load)
     <Teleport to="body">
       <div
         v-if="editing"
-        class="fixed inset-0 z-50 grid place-items-center bg-overlay/80 backdrop-blur-sm px-4 py-8"
+        class="fixed inset-0 z-50 overflow-y-auto bg-overlay/80 backdrop-blur-sm"
         @click.self="closeEdit"
       >
+        <div
+          class="flex min-h-full items-start justify-center px-4 py-8 sm:items-center"
+          @click.self="closeEdit"
+        >
         <div class="reveal w-full max-w-md border border-surface-rim bg-surface-elev shadow-pop">
           <header class="border-b border-surface-rim px-6 py-5">
             <p class="font-mono text-[10px] uppercase tracking-[0.22em] text-fg-mute">Adjust points</p>
@@ -272,6 +331,7 @@ onMounted(load)
               </PrimaryButton>
             </div>
           </form>
+        </div>
         </div>
       </div>
     </Teleport>
