@@ -1,6 +1,23 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
+// Hostnames are configured per environment via Vercel env vars. In local dev they're
+// left empty so both UIs are accessible from localhost.
+const ADMIN_HOST = (import.meta.env.VITE_ADMIN_HOST ?? '').trim()
+const CUSTOMER_HOST = (import.meta.env.VITE_CUSTOMER_HOST ?? '').trim()
+
+function hostname(): string {
+  return typeof window === 'undefined' ? '' : window.location.hostname
+}
+
+function isAdminSubdomain(): boolean {
+  return ADMIN_HOST.length > 0 && hostname() === ADMIN_HOST
+}
+
+function isCustomerSubdomain(): boolean {
+  return CUSTOMER_HOST.length > 0 && hostname() === CUSTOMER_HOST
+}
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -64,6 +81,29 @@ router.beforeEach(async (to) => {
   if (store.isAuthenticated && store.kind === null) {
     await store.logout()
     return to.path.startsWith('/admin') ? { name: 'admin.login' } : { name: 'login' }
+  }
+
+  const isAdminPath = to.path.startsWith('/admin')
+
+  // Wrong-role-for-host sign-out: a customer browsing the admin subdomain (or vice
+  // versa) gets logged out so the host's intended UI shows cleanly.
+  if (isAdminSubdomain() && store.isAuthenticated && store.kind === 'customer') {
+    await store.logout()
+  }
+  if (isCustomerSubdomain() && store.isAuthenticated && store.kind === 'admin') {
+    await store.logout()
+  }
+
+  // Host gating — keep each subdomain restricted to its intended routes.
+  if (isAdminSubdomain() && !isAdminPath) {
+    return store.isAuthenticated && store.kind === 'admin'
+      ? { name: 'admin.dashboard' }
+      : { name: 'admin.login' }
+  }
+  if (isCustomerSubdomain() && isAdminPath) {
+    return store.isAuthenticated && store.kind === 'customer'
+      ? { name: 'customer.dashboard' }
+      : { name: 'home' }
   }
 
   if (to.meta.requiresAuth) {

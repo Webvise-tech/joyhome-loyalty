@@ -14,11 +14,13 @@ import {
 import { db } from '../../firebase'
 import { uploadImage } from '../../api/client'
 import { useDialog } from '../../composables/useDialog'
+import { usePagination } from '../../composables/usePagination'
 import InputLabel from '../../components/InputLabel.vue'
 import InputError from '../../components/InputError.vue'
 import TextInput from '../../components/TextInput.vue'
 import PrimaryButton from '../../components/PrimaryButton.vue'
 import SecondaryButton from '../../components/SecondaryButton.vue'
+import Pagination from '../../components/Pagination.vue'
 
 interface CatalogueItem {
   id: string
@@ -32,6 +34,7 @@ interface CatalogueItem {
 }
 
 const items = ref<CatalogueItem[]>([])
+const itemsPg = usePagination(items)
 const loadingList = ref(false)
 const listError = ref<string | null>(null)
 
@@ -239,7 +242,7 @@ onMounted(loadItems)
         </thead>
         <tbody>
           <tr
-            v-for="item in items"
+            v-for="item in itemsPg.paged.value"
             :key="item.id"
             class="cursor-pointer border-b border-surface-rim transition-colors hover:bg-clover/5"
             @click="openEdit(item)"
@@ -293,6 +296,15 @@ onMounted(loadItems)
           </tr>
         </tbody>
       </table>
+
+      <Pagination
+        v-model:page="itemsPg.page.value"
+        v-model:pageSize="itemsPg.pageSize.value"
+        :total-pages="itemsPg.totalPages.value"
+        :total="itemsPg.total.value"
+        :range-start="itemsPg.rangeStart.value"
+        :range-end="itemsPg.rangeEnd.value"
+      />
     </section>
 
     <!-- Catalogue item modal (create + edit) -->

@@ -6,7 +6,6 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Kreait\Firebase\Contract\Auth as FirebaseAuth;
-use Kreait\Firebase\Contract\Firestore;
 
 class UserController extends Controller
 {
@@ -26,14 +25,23 @@ class UserController extends Controller
         return response()->json(['users' => $users]);
     }
 
-    public function setRole(Request $request, string $uid, Firestore $firestore): JsonResponse
+    public function setRole(Request $request, string $uid, FirebaseAuth $auth): JsonResponse
     {
         $request->validate(['role' => 'required|in:super_admin,user']);
 
-        $firestore->database()->collection('users')->document($uid)->set(
-            ['role' => $request->input('role')],
-            ['merge' => true]
-        );
+        $callerUid = $request->attributes->get('firebase_uid');
+        if ($callerUid === $uid) {
+            return response()->json(
+                ['message' => 'You cannot change your own role.'],
+                403,
+            );
+        }
+
+        $claims = $request->input('role') === 'super_admin'
+            ? ['role' => 'super_admin']
+            : null;
+
+        $auth->setCustomUserClaims($uid, $claims);
 
         return response()->json(['ok' => true]);
     }

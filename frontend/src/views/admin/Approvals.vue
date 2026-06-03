@@ -2,6 +2,9 @@
 import { computed, onMounted, ref } from 'vue'
 import { useAuthStore } from '../../stores/auth'
 import { useDialog } from '../../composables/useDialog'
+import { useToast } from '../../composables/useToast'
+import { usePagination } from '../../composables/usePagination'
+import Pagination from '../../components/Pagination.vue'
 import {
   approveClaim,
   listRecentClaims,
@@ -11,6 +14,7 @@ import {
 
 const auth = useAuthStore()
 const dialog = useDialog()
+const toast = useToast()
 
 const all = ref<Claim[]>([])
 const loading = ref(false)
@@ -23,6 +27,9 @@ const pending = computed(() =>
     .sort((a, b) => (a.submitted_at?.toMillis?.() ?? 0) - (b.submitted_at?.toMillis?.() ?? 0)),
 )
 const history = computed(() => all.value.filter((c) => c.status !== 'PENDING'))
+
+const pendingPg = usePagination(pending)
+const historyPg = usePagination(history)
 
 function statusBadge(s: Claim['status']) {
   if (s === 'APPROVED') return { label: 'Approved', tone: 'text-clover' }
@@ -46,7 +53,9 @@ async function load() {
   try {
     all.value = await listRecentClaims(100)
   } catch (e: any) {
-    listError.value = e?.message ?? 'Failed to load claims.'
+    const message = e?.message ?? 'Failed to load claims.'
+    listError.value = message
+    toast.error(message)
   } finally {
     loading.value = false
   }
@@ -63,9 +72,10 @@ async function approve(c: Claim) {
   busyId.value = c.id
   try {
     await approveClaim(c.id, auth.user.uid)
+    toast.success(`Approved — ${c.points_to_award} pts credited to ${c.customer_name}.`)
     await load()
   } catch (e: any) {
-    await dialog.alert({ title: 'Could not approve', message: e?.message ?? 'Failed to approve claim.' })
+    toast.error(e?.message ?? 'Failed to approve claim.')
   } finally {
     busyId.value = null
   }
@@ -84,9 +94,10 @@ async function reject(c: Claim) {
   busyId.value = c.id
   try {
     await rejectClaim(c.id, auth.user.uid, reason.trim())
+    toast.success(`Claim from ${c.customer_name} rejected.`)
     await load()
   } catch (e: any) {
-    await dialog.alert({ title: 'Could not reject', message: e?.message ?? 'Failed to reject claim.' })
+    toast.error(e?.message ?? 'Failed to reject claim.')
   } finally {
     busyId.value = null
   }
@@ -147,7 +158,7 @@ onMounted(load)
         </thead>
         <tbody>
           <tr
-            v-for="c in pending"
+            v-for="c in pendingPg.paged.value"
             :key="c.id"
             class="border-b border-surface-rim transition-colors hover:bg-clover/5"
           >
@@ -182,6 +193,16 @@ onMounted(load)
           </tr>
         </tbody>
       </table>
+
+      <Pagination
+        v-if="pending.length"
+        v-model:page="pendingPg.page.value"
+        v-model:pageSize="pendingPg.pageSize.value"
+        :total-pages="pendingPg.totalPages.value"
+        :total="pendingPg.total.value"
+        :range-start="pendingPg.rangeStart.value"
+        :range-end="pendingPg.rangeEnd.value"
+      />
     </section>
 
     <!-- History (approved + rejected) -->
@@ -203,7 +224,7 @@ onMounted(load)
         </thead>
         <tbody>
           <tr
-            v-for="c in history"
+            v-for="c in historyPg.paged.value"
             :key="c.id"
             class="border-b border-surface-rim transition-colors hover:bg-clover/5"
           >
@@ -233,6 +254,15 @@ onMounted(load)
           </tr>
         </tbody>
       </table>
+
+      <Pagination
+        v-model:page="historyPg.page.value"
+        v-model:pageSize="historyPg.pageSize.value"
+        :total-pages="historyPg.totalPages.value"
+        :total="historyPg.total.value"
+        :range-start="historyPg.rangeStart.value"
+        :range-end="historyPg.rangeEnd.value"
+      />
     </section>
   </div>
 </template>

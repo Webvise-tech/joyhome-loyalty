@@ -24,7 +24,8 @@ class VerifyFirebaseToken
         try {
             $verified = $this->auth->verifyIdToken($header);
         } catch (FailedToVerifyToken $e) {
-            return new JsonResponse(['message' => 'Invalid token', 'error' => $e->getMessage()], 401);
+            report($e);
+            return new JsonResponse(['message' => 'Invalid token'], 401);
         }
 
         $request->attributes->set('firebase_uid', $verified->claims()->get('sub'));

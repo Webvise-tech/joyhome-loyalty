@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter, RouterLink } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { useToast } from '../composables/useToast'
 import InputLabel from '../components/InputLabel.vue'
 import InputError from '../components/InputError.vue'
 import TextInput from '../components/TextInput.vue'
@@ -9,6 +10,7 @@ import PrimaryButton from '../components/PrimaryButton.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
+const toast = useToast()
 
 const email = ref('')
 const password = ref('')
@@ -20,11 +22,29 @@ async function submit() {
   loading.value = true
   try {
     await auth.customerLogin(email.value.trim(), password.value)
+    toast.success('Welcome back!')
     router.push({ name: 'customer.dashboard' })
   } catch (e: any) {
-    error.value = e.message ?? 'Could not sign in.'
+    const message = friendlyAuthError(e?.code) ?? e?.message ?? 'Could not sign in.'
+    error.value = message
+    toast.error(message)
   } finally {
     loading.value = false
+  }
+}
+
+function friendlyAuthError(code?: string): string | null {
+  switch (code) {
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'Wrong email or password.'
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please wait a moment and try again.'
+    case 'auth/network-request-failed':
+      return 'Network error — please check your connection.'
+    default:
+      return null
   }
 }
 </script>

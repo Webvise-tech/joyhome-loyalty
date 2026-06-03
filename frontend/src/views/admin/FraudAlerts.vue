@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { listRejectedClaims, type Claim } from '../../api/loyalty'
+import { usePagination } from '../../composables/usePagination'
+import Pagination from '../../components/Pagination.vue'
 
 const claims = ref<Claim[]>([])
+const claimsPg = usePagination(claims)
 const loading = ref(false)
 const error = ref<string | null>(null)
 
@@ -69,7 +72,7 @@ onMounted(load)
       </div>
 
       <ul v-else class="divide-y divide-surface-rim border-t border-b border-surface-rim">
-        <li v-for="c in claims" :key="c.id" class="py-5">
+        <li v-for="c in claimsPg.paged.value" :key="c.id" class="py-5">
           <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div class="min-w-0 flex-1">
               <div class="flex items-baseline gap-3">
@@ -98,6 +101,15 @@ onMounted(load)
           </div>
         </li>
       </ul>
+
+      <Pagination
+        v-model:page="claimsPg.page.value"
+        v-model:pageSize="claimsPg.pageSize.value"
+        :total-pages="claimsPg.totalPages.value"
+        :total="claimsPg.total.value"
+        :range-start="claimsPg.rangeStart.value"
+        :range-end="claimsPg.rangeEnd.value"
+      />
     </section>
   </div>
 </template>

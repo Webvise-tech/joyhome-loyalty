@@ -2,6 +2,9 @@
 import { computed, onMounted, ref } from 'vue'
 import { useAuthStore } from '../../stores/auth'
 import { useDialog } from '../../composables/useDialog'
+import { useToast } from '../../composables/useToast'
+import { usePagination } from '../../composables/usePagination'
+import Pagination from '../../components/Pagination.vue'
 import {
   cancelRedemption,
   confirmInStoreOtp,
@@ -15,6 +18,7 @@ import PrimaryButton from '../../components/PrimaryButton.vue'
 
 const auth = useAuthStore()
 const dialog = useDialog()
+const toast = useToast()
 
 const all = ref<Redemption[]>([])
 const loading = ref(false)
@@ -30,6 +34,10 @@ const pending = computed(() => all.value.filter((r) => r.status === 'PENDING'))
 const history = computed(() => all.value.filter((r) => r.status !== 'PENDING'))
 const onlinePending = computed(() => pending.value.filter((r) => r.method === 'ONLINE'))
 const inStorePending = computed(() => pending.value.filter((r) => r.method === 'IN_STORE'))
+
+const onlinePg = usePagination(onlinePending)
+const inStorePg = usePagination(inStorePending)
+const historyPg = usePagination(history)
 
 function statusBadge(s: Redemption['status']) {
   if (s === 'CONFIRMED') return { label: 'Confirmed', tone: 'text-clover' }
@@ -54,7 +62,9 @@ async function load() {
   try {
     all.value = await listRecentRedemptions(50)
   } catch (e: any) {
-    loadError.value = e?.message ?? 'Failed to load redemptions.'
+    const message = e?.message ?? 'Failed to load redemptions.'
+    loadError.value = message
+    toast.error(message)
   } finally {
     loading.value = false
   }
@@ -69,9 +79,12 @@ async function confirmOtp() {
     const r = await confirmInStoreOtp(otpCode.value, auth.user.uid)
     otpSuccess.value = r
     otpCode.value = ''
+    toast.success(`Redemption confirmed — give ${r.customer_name} their ${r.catalogue_item_name}.`)
     await load()
   } catch (e: any) {
-    otpError.value = e?.message ?? 'Could not confirm code.'
+    const message = e?.message ?? 'Could not confirm code.'
+    otpError.value = message
+    toast.error(message)
   } finally {
     otpBusy.value = false
   }
@@ -88,9 +101,10 @@ async function markDelivered(r: Redemption) {
   busyId.value = r.id
   try {
     await markRedemptionDelivered(r.id, auth.user.uid)
+    toast.success(`Marked "${r.catalogue_item_name}" delivered.`)
     await load()
   } catch (e: any) {
-    await dialog.alert({ title: 'Could not update', message: e?.message ?? 'Failed to mark delivered.' })
+    toast.error(e?.message ?? 'Failed to mark delivered.')
   } finally {
     busyId.value = null
   }
@@ -109,9 +123,10 @@ async function cancel(r: Redemption) {
   busyId.value = r.id
   try {
     await cancelRedemption(r.id, auth.user.uid)
+    toast.success(`Redemption canceled — ${r.points_used} pts refunded to ${r.customer_name}.`)
     await load()
   } catch (e: any) {
-    await dialog.alert({ title: 'Could not cancel', message: e?.message ?? 'Failed to cancel.' })
+    toast.error(e?.message ?? 'Failed to cancel.')
   } finally {
     busyId.value = null
   }
@@ -240,7 +255,7 @@ onMounted(load)
 
       <ul v-else class="divide-y divide-surface-rim border-t border-b border-surface-rim">
         <li
-          v-for="r in onlinePending"
+          v-for="r in onlinePg.paged.value"
           :key="r.id"
           class="flex flex-col gap-3 py-4 sm:flex-row sm:items-start sm:justify-between"
         >
@@ -287,6 +302,16 @@ onMounted(load)
           </div>
         </li>
       </ul>
+
+      <Pagination
+        v-if="onlinePending.length"
+        v-model:page="onlinePg.page.value"
+        v-model:pageSize="onlinePg.pageSize.value"
+        :total-pages="onlinePg.totalPages.value"
+        :total="onlinePg.total.value"
+        :range-start="onlinePg.rangeStart.value"
+        :range-end="onlinePg.rangeEnd.value"
+      />
     </section>
 
     <!-- In-store pending list (informational) -->
@@ -296,7 +321,7 @@ onMounted(load)
       </p>
       <ul class="divide-y divide-surface-rim border-t border-b border-surface-rim">
         <li
-          v-for="r in inStorePending"
+          v-for="r in inStorePg.paged.value"
           :key="r.id"
           class="flex items-center justify-between py-3"
         >
@@ -318,6 +343,15 @@ onMounted(load)
           </button>
         </li>
       </ul>
+
+      <Pagination
+        v-model:page="inStorePg.page.value"
+        v-model:pageSize="inStorePg.pageSize.value"
+        :total-pages="inStorePg.totalPages.value"
+        :total="inStorePg.total.value"
+        :range-start="inStorePg.rangeStart.value"
+        :range-end="inStorePg.rangeEnd.value"
+      />
     </section>
 
     <!-- History (all non-pending: confirmed / delivered / canceled) -->
@@ -326,7 +360,7 @@ onMounted(load)
         Recent history
       </p>
       <ul class="divide-y divide-surface-rim border-t border-b border-surface-rim">
-        <li v-for="r in history" :key="r.id" class="flex items-center gap-4 py-3">
+        <li v-for="r in historyPg.paged.value" :key="r.id" class="flex items-center gap-4 py-3">
           <img
             v-if="r.catalogue_item_photo"
             :src="r.catalogue_item_photo"
@@ -358,6 +392,15 @@ onMounted(load)
           </span>
         </li>
       </ul>
+
+      <Pagination
+        v-model:page="historyPg.page.value"
+        v-model:pageSize="historyPg.pageSize.value"
+        :total-pages="historyPg.totalPages.value"
+        :total="historyPg.total.value"
+        :range-start="historyPg.rangeStart.value"
+        :range-end="historyPg.rangeEnd.value"
+      />
     </section>
   </div>
 </template>

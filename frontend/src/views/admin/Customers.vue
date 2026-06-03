@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useAuthStore } from '../../stores/auth'
+import { useToast } from '../../composables/useToast'
+import { usePagination } from '../../composables/usePagination'
+import Pagination from '../../components/Pagination.vue'
 import {
   adjustCustomerPoints,
   listCustomersWithTotals,
@@ -13,8 +16,10 @@ import PrimaryButton from '../../components/PrimaryButton.vue'
 import SecondaryButton from '../../components/SecondaryButton.vue'
 
 const auth = useAuthStore()
+const toast = useToast()
 
 const customers = ref<CustomerSummary[]>([])
+const customersPg = usePagination(customers)
 const loading = ref(false)
 const error = ref<string | null>(null)
 
@@ -46,7 +51,9 @@ async function load() {
   try {
     customers.value = await listCustomersWithTotals()
   } catch (e: any) {
-    error.value = e?.message ?? 'Failed to load customers.'
+    const message = e?.message ?? 'Failed to load customers.'
+    error.value = message
+    toast.error(message)
   } finally {
     loading.value = false
   }
@@ -67,17 +74,23 @@ async function submitAdjust() {
   if (!editing.value || !auth.user) return
   adjustSubmitting.value = true
   adjustError.value = null
+  const target = editing.value
+  const delta = Math.trunc(Number(adjust.delta) || 0)
   try {
     await adjustCustomerPoints({
-      customer_id: editing.value.uid,
+      customer_id: target.uid,
       delta: Number(adjust.delta),
       reason: adjust.reason,
       admin_uid: auth.user.uid,
     })
+    const verb = delta >= 0 ? 'credited' : 'deducted'
+    toast.success(`${Math.abs(delta)} pts ${verb} for ${target.first_name} ${target.last_name}.`)
     closeEdit()
     await load()
   } catch (e: any) {
-    adjustError.value = e?.message ?? 'Failed to adjust points.'
+    const message = e?.message ?? 'Failed to adjust points.'
+    adjustError.value = message
+    toast.error(message)
   } finally {
     adjustSubmitting.value = false
   }
@@ -137,7 +150,7 @@ onMounted(load)
         </thead>
         <tbody>
           <tr
-            v-for="c in customers"
+            v-for="c in customersPg.paged.value"
             :key="c.uid"
             class="cursor-pointer border-b border-surface-rim transition-colors hover:bg-clover/5"
             @click="openEdit(c)"
@@ -167,6 +180,15 @@ onMounted(load)
           </tr>
         </tbody>
       </table>
+
+      <Pagination
+        v-model:page="customersPg.page.value"
+        v-model:pageSize="customersPg.pageSize.value"
+        :total-pages="customersPg.totalPages.value"
+        :total="customersPg.total.value"
+        :range-start="customersPg.rangeStart.value"
+        :range-end="customersPg.rangeEnd.value"
+      />
     </section>
 
     <!-- Adjust-points modal -->

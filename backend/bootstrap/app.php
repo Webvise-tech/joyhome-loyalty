@@ -13,6 +13,8 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->trustProxies(at: '*');
+
         $middleware->alias([
             'firebase.auth' => \App\Http\Middleware\VerifyFirebaseToken::class,
             'firebase.superadmin' => \App\Http\Middleware\EnsureSuperAdmin::class,

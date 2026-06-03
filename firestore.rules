@@ -21,48 +21,88 @@ service cloud.firestore {
       allow write: if isSuperAdmin();
     }
 
-    // Customers
+    // Customers — profile doc keyed by Firebase Auth UID.
     match /customers/{uid} {
       allow read: if isSelf(uid) || isSuperAdmin();
-      allow create: if isSelf(uid);
+
+      // First-time self-registration. Whitelist the exact fields the app writes,
+      // pin total_points to 0, require strings (not numbers/objects) for text fields.
+      allow create: if isSelf(uid)
+        && request.resource.data.keys().hasOnly([
+             'first_name', 'last_name', 'email', 'phone',
+             'date_of_birth', 'total_points', 'created_at'
+           ])
+        && request.resource.data.keys().hasAll([
+             'first_name', 'last_name', 'email', 'phone', 'total_points'
+           ])
+        && request.resource.data.first_name is string
+        && request.resource.data.last_name is string
+        && request.resource.data.email is string
+        && request.resource.data.phone is string
+        && request.resource.data.total_points == 0;
+
+      // Only admins can change profile fields (including total_points).
       allow update, delete: if isSuperAdmin();
     }
 
-    // Catalogue — any signed-in user can read; super admins write.
+    // Catalogue — any signed-in user reads; super admins write.
     match /catalogue/{itemId} {
       allow read: if isSignedIn();
       allow write: if isSuperAdmin();
     }
 
     // Claims (in-store receipt submissions awaiting approval).
-    // Customers can create PENDING claims for themselves and read their own;
-    // super admins read all and update status (approve/reject).
+    // Customer can create a PENDING claim for themselves with capped/computed values.
+    // Only admins can approve or modify after creation.
     match /claims/{claimId} {
       allow read: if isSuperAdmin()
                   || (isSignedIn() && resource.data.customer_id == request.auth.uid);
+
       allow create: if isSignedIn()
-                    && request.resource.data.customer_id == request.auth.uid
-                    && request.resource.data.status == 'PENDING'
-                    && request.resource.data.claimed_amount is number
-                    && request.resource.data.claimed_amount >= 10;
+        && request.resource.data.keys().hasOnly([
+             'customer_id', 'customer_name', 'customer_email', 'customer_phone',
+             'claimed_amount', 'points_to_award', 'status', 'submitted_at'
+           ])
+        && request.resource.data.customer_id == request.auth.uid
+        && request.resource.data.status == 'PENDING'
+        && request.resource.data.claimed_amount is number
+        && request.resource.data.claimed_amount >= 10
+        && request.resource.data.claimed_amount <= 100000
+        && request.resource.data.points_to_award is int
+        && request.resource.data.points_to_award >= 0
+        // The decisive check: server pins points to floor(amount / 10).
+        // Customer cannot inflate points_to_award via DevTools or Postman.
+        && request.resource.data.points_to_award == int(request.resource.data.claimed_amount) / 10
+        && request.resource.data.submitted_at == request.time;
+
       allow update, delete: if isSuperAdmin();
     }
 
-    // Points batches (created server-side / admin-side when a claim is approved
-    // or a Shopify webhook fires). Customers only read their own.
+    // Points batches — only admins can create/modify (admin SDK or admin browser session).
+    // Customers read only their own.
     match /points_batches/{batchId} {
       allow read: if isSuperAdmin()
                   || (isSignedIn() && resource.data.customer_id == request.auth.uid);
       allow write: if isSuperAdmin();
     }
 
-    // Redemptions (customer spends points). Customer can create their own;
-    // super admins read all and fulfill.
+    // Redemptions — customer creates PENDING for themselves; admin confirms/fulfills.
     match /redemptions/{redemptionId} {
       allow read: if isSuperAdmin()
                   || (isSignedIn() && resource.data.customer_id == request.auth.uid);
+
       allow create: if isSignedIn()
-                    && request.resource.data.customer_id == request.auth.uid;
+        && request.resource.data.customer_id == request.auth.uid
+        && request.resource.data.status == 'PENDING'
+        && request.resource.data.points_used is int
+        && request.resource.data.points_used > 0
+        // points_used must equal the catalogue item's actual price — server-anchored.
+        // Customer cannot redeem a $5000 item for 1 point.
+        && request.resource.data.points_used == get(
+             /databases/$(database)/documents/catalogue/$(request.resource.data.catalogue_item_id)
+           ).data.points_cost
+        && request.resource.data.created_at == request.time;
+
       allow update, delete: if isSuperAdmin();
     }
 

@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter, RouterLink } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { useToast } from '../composables/useToast'
 import InputLabel from '../components/InputLabel.vue'
 import InputError from '../components/InputError.vue'
 import TextInput from '../components/TextInput.vue'
@@ -9,6 +10,7 @@ import PrimaryButton from '../components/PrimaryButton.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
+const toast = useToast()
 
 const firstName = ref('')
 const lastName = ref('')
@@ -40,9 +42,12 @@ async function submit() {
       phone: phone.value.trim(),
       date_of_birth: dateOfBirth.value,
     })
+    toast.success('Account created — welcome!')
     router.push({ name: 'customer.dashboard' })
   } catch (e: any) {
-    error.value = friendlyError(e)
+    const message = friendlyError(e)
+    error.value = message
+    toast.error(message)
   } finally {
     loading.value = false
   }

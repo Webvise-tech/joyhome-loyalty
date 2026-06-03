@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, computed, reactive } from 'vue'
 import { useAuthStore } from '../stores/auth'
+import { useToast } from '../composables/useToast'
 import {
   availableBalance,
   listActiveCatalogue,
@@ -21,6 +22,7 @@ import PrimaryButton from '../components/PrimaryButton.vue'
 import SecondaryButton from '../components/SecondaryButton.vue'
 
 const auth = useAuthStore()
+const toast = useToast()
 
 const catalogue = ref<CatalogueItem[]>([])
 const batches = ref<PointsBatch[]>([])
@@ -88,6 +90,7 @@ async function submitRedeemForm() {
 
   redeemSubmitting.value = true
   redeemError.value = null
+  const itemName = redeemItem.value.name
   try {
     const { otp_code } = await submitRedemption({
       customer_id: auth.user.uid,
@@ -109,14 +112,18 @@ async function submitRedeemForm() {
 
     if (otp_code) {
       otpReveal.value = otp_code
+      toast.success(`Your code is ready — show it at the register to pick up ${itemName}.`)
+    } else {
+      toast.success(`Order placed — we'll deliver ${itemName} soon.`)
     }
     await loadAll()
     if (!otp_code) {
-      // online — auto-close after a beat
       setTimeout(closeRedeem, 1800)
     }
   } catch (e: any) {
-    redeemError.value = e?.message ?? 'Could not submit redemption.'
+    const message = e?.message ?? 'Could not submit redemption.'
+    redeemError.value = message
+    toast.error(message)
   } finally {
     redeemSubmitting.value = false
   }
@@ -171,10 +178,13 @@ async function submitClaimForm() {
       claimed_amount: Number(claim.amount),
     })
     claimSuccess.value = true
+    toast.success(`Receipt submitted — ${previewPoints.value} pts pending approval.`)
     await loadAll()
     setTimeout(() => { showClaim.value = false }, 1400)
   } catch (e: any) {
-    claimError.value = e?.message ?? 'Could not submit claim.'
+    const message = e?.message ?? 'Could not submit claim.'
+    claimError.value = message
+    toast.error(message)
   } finally {
     claimSubmitting.value = false
   }
