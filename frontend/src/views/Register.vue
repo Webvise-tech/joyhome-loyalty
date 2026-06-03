@@ -6,6 +6,7 @@ import { useToast } from '../composables/useToast'
 import InputLabel from '../components/InputLabel.vue'
 import InputError from '../components/InputError.vue'
 import TextInput from '../components/TextInput.vue'
+import PasswordInput from '../components/PasswordInput.vue'
 import PrimaryButton from '../components/PrimaryButton.vue'
 
 const router = useRouter()
@@ -85,10 +86,9 @@ async function submit() {
 
       <div>
         <InputLabel for="password" value="Password" />
-        <TextInput
+        <PasswordInput
           id="password"
           v-model="password"
-          type="password"
           required
           :minlength="8"
           autocomplete="new-password"

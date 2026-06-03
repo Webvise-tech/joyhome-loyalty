@@ -6,6 +6,7 @@ import { useToast } from '../composables/useToast'
 import InputLabel from '../components/InputLabel.vue'
 import InputError from '../components/InputError.vue'
 import TextInput from '../components/TextInput.vue'
+import PasswordInput from '../components/PasswordInput.vue'
 import PrimaryButton from '../components/PrimaryButton.vue'
 
 const router = useRouter()
@@ -22,6 +23,18 @@ async function submit() {
   loading.value = true
   try {
     await auth.customerLogin(email.value.trim(), password.value)
+
+    // An admin signing in here means they're on the wrong subdomain.
+    // The router will redirect them, but the success toast would be misleading,
+    // so surface a clear message instead.
+    if (auth.kind === 'admin') {
+      await auth.logout()
+      const message = 'This is an admin account. Please sign in at admin.joyhomelb.com.'
+      error.value = message
+      toast.error(message)
+      return
+    }
+
     toast.success('Welcome back!')
     router.push({ name: 'customer.dashboard' })
   } catch (e: any) {
@@ -72,10 +85,9 @@ function friendlyAuthError(code?: string): string | null {
 
       <div>
         <InputLabel for="password" value="Password" />
-        <TextInput
+        <PasswordInput
           id="password"
           v-model="password"
-          type="password"
           required
           autocomplete="current-password"
         />

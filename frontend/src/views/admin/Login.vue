@@ -6,6 +6,7 @@ import { useToast } from '../../composables/useToast'
 import Logo from '../../components/Logo.vue'
 import InputLabel from '../../components/InputLabel.vue'
 import InputError from '../../components/InputError.vue'
+import PasswordInput from '../../components/PasswordInput.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -87,14 +88,14 @@ function friendlyAuthError(code?: string): string | null {
 
           <div>
             <InputLabel for="admin-password" value="Password" />
-            <input
-              id="admin-password"
-              v-model="password"
-              type="password"
-              required
-              autocomplete="current-password"
-              class="mt-1 w-full border-0 border-b border-fg/30 bg-transparent px-0 py-2 text-[15px] text-fg caret-clover transition-colors placeholder:text-fg-mute focus:border-clover focus:outline-none focus:ring-0"
-            />
+            <div class="mt-1">
+              <PasswordInput
+                id="admin-password"
+                v-model="password"
+                required
+                autocomplete="current-password"
+              />
+            </div>
           </div>
 
           <InputError :message="error" />
