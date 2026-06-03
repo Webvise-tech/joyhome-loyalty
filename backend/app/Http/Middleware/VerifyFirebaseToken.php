@@ -14,7 +14,17 @@ class VerifyFirebaseToken
 {
     public function __construct(private FirebaseAuth $auth) {}
 
-    public function handle(Request $request, Closure $next): Response
+    /*
+     * `$mode` controls the revocation check (kreait's `$checkIfRevoked`):
+     *   - 'lax' (default): only verify the JWT signature + claims. Cheap, no
+     *     network call to Firebase Auth. Used for read-only endpoints like
+     *     /me where stale-by-up-to-1h is acceptable.
+     *   - 'strict': additionally fetch the user record and reject the token
+     *     if it was revoked or the user is disabled. Adds ~100–300 ms per
+     *     request (HTTPS round-trip Heroku → Firebase Auth REST). Used for
+     *     admin endpoints so a demoted/fired admin loses access immediately.
+     */
+    public function handle(Request $request, Closure $next, string $mode = 'lax'): Response
     {
         $header = $request->bearerToken();
 
@@ -22,12 +32,10 @@ class VerifyFirebaseToken
             return new JsonResponse(['message' => 'Missing bearer token'], 401);
         }
 
+        $checkRevoked = $mode === 'strict';
+
         try {
-            // checkIfRevoked = true: also reject tokens for disabled users and
-            // tokens whose validity-time was bumped (Firebase Admin SDK
-            // `revokeRefreshTokens`). Without this, a demoted/fired admin keeps
-            // their session up to ~1h until natural token expiry.
-            $verified = $this->auth->verifyIdToken($header, true);
+            $verified = $this->auth->verifyIdToken($header, $checkRevoked);
         } catch (RevokedIdToken $e) {
             return new JsonResponse(['message' => 'Token revoked'], 401);
         } catch (FailedToVerifyToken $e) {
