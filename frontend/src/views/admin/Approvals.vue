@@ -261,7 +261,8 @@ onMounted(load)
       <p class="mb-4 font-mono text-[10px] uppercase tracking-[0.22em] text-fg-mute">
         Recent history
       </p>
-      <table class="w-full">
+      <!-- Desktop: table -->
+      <table class="hidden w-full md:table">
         <thead>
           <tr class="border-b border-surface-rim text-left">
             <th class="py-3 pr-6 font-mono text-[10px] uppercase tracking-[0.22em] text-fg-mute">Customer</th>
@@ -305,6 +306,57 @@ onMounted(load)
           </tr>
         </tbody>
       </table>
+
+      <!-- Mobile: card list -->
+      <ul class="space-y-3 md:hidden">
+        <li
+          v-for="c in historyPg.paged.value"
+          :key="c.id"
+          class="border border-surface-rim bg-surface-elev p-4"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-[15px] text-fg">{{ c.customer_name }}</p>
+              <p class="mt-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-fg-mute">
+                {{ fmtDateTime(c.reviewed_at) }}
+              </p>
+            </div>
+            <span
+              class="flex-shrink-0 font-mono text-[10px] uppercase tracking-[0.18em]"
+              :class="statusBadge(c.status).tone"
+            >
+              {{ statusBadge(c.status).label }}
+            </span>
+          </div>
+
+          <div class="mt-3 space-y-1 border-t border-surface-rim/60 pt-3 font-mono text-[12px] text-fg-soft">
+            <p class="flex justify-between gap-2">
+              <span class="text-fg-mute">Email</span>
+              <span class="truncate">{{ c.customer_email || '—' }}</span>
+            </p>
+            <p class="flex justify-between gap-2">
+              <span class="text-fg-mute">Phone</span>
+              <span>{{ c.customer_phone || '—' }}</span>
+            </p>
+          </div>
+
+          <div class="mt-3 grid grid-cols-2 gap-3 border-t border-surface-rim/60 pt-3">
+            <div>
+              <p class="font-mono text-[9px] uppercase tracking-[0.18em] text-fg-mute">Receipt</p>
+              <p class="font-mono tabular-nums text-[14px] text-fg">${{ c.claimed_amount }}</p>
+            </div>
+            <div class="text-right">
+              <p class="font-mono text-[9px] uppercase tracking-[0.18em] text-fg-mute">Points</p>
+              <p
+                class="font-mono tabular-nums text-[14px]"
+                :class="c.status === 'APPROVED' ? 'text-clover' : 'text-fg-mute line-through'"
+              >
+                {{ c.status === 'APPROVED' ? '+' : '' }}{{ c.points_to_award }}
+              </p>
+            </div>
+          </div>
+        </li>
+      </ul>
 
       <Pagination
         v-model:page="historyPg.page.value"
