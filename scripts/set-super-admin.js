@@ -7,7 +7,7 @@
 const admin = require('firebase-admin')
 const path = require('path')
 
-const serviceAccount = require(path.resolve(__dirname, '../backend/firebase-service-account.json'))
+const serviceAccount = require(path.resolve(__dirname, '../backend/storage/firebase/service-account.json'))
 const uid = process.argv[2]
 
 if (!uid) {
