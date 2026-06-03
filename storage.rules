@@ -13,12 +13,16 @@ service firebase.storage {
 
     // Catalogue photos — readable by any signed-in user (customers browsing rewards),
     // writable only by super admins (uploaded from /admin/catalogue).
-    // 5 MB cap; only image content types accepted.
+    // 5 MB cap and image-only content type on UPLOAD. Delete is split out
+    // because `request.resource` is null on delete and the size/contentType
+    // checks would fail-closed and block legitimate cleanup of orphan blobs
+    // when an admin deletes or replaces a catalogue item's photo.
     match /catalogue/{file=**} {
       allow read: if isSignedIn();
-      allow write: if isSuperAdmin()
-                   && request.resource.size < 5 * 1024 * 1024
-                   && request.resource.contentType.matches('image/.*');
+      allow create, update: if isSuperAdmin()
+                            && request.resource.size < 5 * 1024 * 1024
+                            && request.resource.contentType.matches('image/.*');
+      allow delete: if isSuperAdmin();
     }
 
     // Customer-uploaded receipt photos (for in-store claim proofs, Phase 2).

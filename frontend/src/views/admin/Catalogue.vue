@@ -12,7 +12,7 @@ import {
   serverTimestamp,
 } from 'firebase/firestore'
 import { db } from '../../firebase'
-import { uploadImage } from '../../api/client'
+import { deleteImage, uploadImage } from '../../api/client'
 import { useDialog } from '../../composables/useDialog'
 import { usePagination } from '../../composables/usePagination'
 import InputLabel from '../../components/InputLabel.vue'
@@ -128,10 +128,19 @@ async function loadItems() {
 async function submit() {
   submitting.value = true
   formError.value = null
+
+  // Track the just-uploaded blob separately from the doc's persisted URL so we
+  // can clean up either side of a partial failure:
+  //   - upload OK + Firestore write fails  → delete the new blob (rollback)
+  //   - upload OK + Firestore write OK     → delete the OLD blob (replacement)
+  const oldPhotoUrl = existingPhotoUrl.value
+  let uploadedNewUrl: string | null = null
+
   try {
-    let photo_url: string | null = existingPhotoUrl.value
+    let photo_url: string | null = oldPhotoUrl
     if (imageFile.value) {
-      photo_url = await uploadImage(imageFile.value, 'catalogue')
+      uploadedNewUrl = await uploadImage(imageFile.value, 'catalogue')
+      photo_url = uploadedNewUrl
     }
 
     const payload = {
@@ -152,9 +161,19 @@ async function submit() {
       })
     }
 
+    // Firestore write succeeded — if we just replaced an existing photo,
+    // the previous blob is now orphaned. Best-effort cleanup.
+    if (uploadedNewUrl && oldPhotoUrl && oldPhotoUrl !== uploadedNewUrl) {
+      await deleteImage(oldPhotoUrl)
+    }
+
     closeForm()
     await loadItems()
   } catch (e: any) {
+    // Rollback: we uploaded a blob but never persisted a reference to it.
+    if (uploadedNewUrl) {
+      await deleteImage(uploadedNewUrl)
+    }
     formError.value = e?.message ?? 'Failed to save item.'
   } finally {
     submitting.value = false
@@ -183,6 +202,10 @@ async function remove(item: CatalogueItem) {
   if (!ok) return
   try {
     await deleteDoc(doc(db, 'catalogue', item.id))
+    // Best-effort: clean the photo out of Storage now that nothing references
+    // it. If this fails the Firestore deletion still stands; the blob is just
+    // orphaned and can be swept later.
+    await deleteImage(item.photo_url)
     await loadItems()
   } catch (e: any) {
     listError.value = e?.message ?? 'Failed to delete item.'
