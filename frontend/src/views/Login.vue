@@ -25,11 +25,11 @@ async function submit() {
     await auth.customerLogin(email.value.trim(), password.value)
 
     // An admin signing in here means they're on the wrong subdomain.
-    // The router will redirect them, but the success toast would be misleading,
-    // so surface a clear message instead.
+    // Don't reveal that the account exists or is an admin — generic auth message
+    // is both better UX and better security.
     if (auth.kind === 'admin') {
       await auth.logout()
-      const message = 'This is an admin account. Please sign in at admin.joyhomelb.com.'
+      const message = 'Account does not exist.'
       error.value = message
       toast.error(message)
       return
