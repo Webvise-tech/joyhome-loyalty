@@ -12,6 +12,25 @@ import { auth, db } from '../firebase'
 
 export type UserKind = 'admin' | 'customer' | null
 
+/*
+ * Force a fresh ID token + re-hydrated role/profile on this cadence. The
+ * Firebase ID token has a 1h TTL, so if an admin is demoted (custom claim
+ * removed) the role flips here within at most this interval — without it the
+ * stale claim grants admin UI access until the next natural refresh. Also
+ * surfaces server-side token revocation: `getIdToken(true)` rejects for
+ * disabled / revoked users, and we sign them out on failure.
+ */
+const TOKEN_REFRESH_INTERVAL_MS = 5 * 60 * 1000
+
+let refreshHandle: ReturnType<typeof setInterval> | null = null
+
+function stopRefreshTimer(): void {
+  if (refreshHandle) {
+    clearInterval(refreshHandle)
+    refreshHandle = null
+  }
+}
+
 export interface CustomerProfile {
   first_name: string
   last_name: string
@@ -50,20 +69,48 @@ export const useAuthStore = defineStore('auth', {
           try {
             if (user) {
               await this.hydrateUserKind()
+              this.startTokenRefreshTimer()
             } else {
               this.kind = null
               this.customer = null
+              stopRefreshTimer()
             }
           } catch (e) {
             console.error('Failed to hydrate user kind:', e)
             this.kind = null
             this.customer = null
+            stopRefreshTimer()
           } finally {
             this.ready = true
             resolve()
           }
         })
       })
+    },
+
+    /*
+     * Idempotent: replaces any existing timer. Fires every 5 min while signed
+     * in. On a force-refresh failure (revoked token / disabled account) we
+     * sign out — the api/client.ts 401 toast would already have surfaced this
+     * to the user on their next API call, but this catches them sooner.
+     */
+    startTokenRefreshTimer(): void {
+      stopRefreshTimer()
+      refreshHandle = setInterval(async () => {
+        if (!this.user) {
+          stopRefreshTimer()
+          return
+        }
+        try {
+          await this.user.getIdToken(true)
+          await this.hydrateUserKind()
+        } catch (e) {
+          if (import.meta.env.DEV) {
+            console.warn('Token refresh failed; signing out.', e)
+          }
+          try { await this.logout() } catch { /* ignore */ }
+        }
+      }, TOKEN_REFRESH_INTERVAL_MS)
     },
 
     async hydrateUserKind() {
@@ -143,6 +190,7 @@ export const useAuthStore = defineStore('auth', {
     },
 
     async logout() {
+      stopRefreshTimer()
       await signOut(auth)
     },
 

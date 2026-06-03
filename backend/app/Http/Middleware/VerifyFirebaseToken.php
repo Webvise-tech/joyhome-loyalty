@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Kreait\Firebase\Contract\Auth as FirebaseAuth;
 use Kreait\Firebase\Exception\Auth\FailedToVerifyToken;
+use Kreait\Firebase\Exception\Auth\RevokedIdToken;
 use Symfony\Component\HttpFoundation\Response;
 
 class VerifyFirebaseToken
@@ -22,7 +23,13 @@ class VerifyFirebaseToken
         }
 
         try {
-            $verified = $this->auth->verifyIdToken($header);
+            // checkIfRevoked = true: also reject tokens for disabled users and
+            // tokens whose validity-time was bumped (Firebase Admin SDK
+            // `revokeRefreshTokens`). Without this, a demoted/fired admin keeps
+            // their session up to ~1h until natural token expiry.
+            $verified = $this->auth->verifyIdToken($header, true);
+        } catch (RevokedIdToken $e) {
+            return new JsonResponse(['message' => 'Token revoked'], 401);
         } catch (FailedToVerifyToken $e) {
             report($e);
             return new JsonResponse(['message' => 'Invalid token'], 401);

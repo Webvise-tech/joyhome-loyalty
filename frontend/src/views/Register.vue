@@ -25,10 +25,14 @@ const loading = ref(false)
 
 function friendlyError(e: any): string {
   const code = e?.code as string | undefined
-  if (code === 'auth/email-already-in-use') return 'An account with this email already exists.'
+  // Don't reveal whether the email is already registered (account enumeration).
+  // A small known shop's customer list is easy to fish for otherwise.
+  if (code === 'auth/email-already-in-use') {
+    return 'Could not create account. If you already have one, please sign in instead.'
+  }
   if (code === 'auth/invalid-email') return 'That email address is not valid.'
   if (code === 'auth/weak-password') return 'Password must be at least 6 characters.'
-  return e?.message ?? 'Could not create account.'
+  return 'Could not create account. Please check your details and try again.'
 }
 
 async function submit() {
