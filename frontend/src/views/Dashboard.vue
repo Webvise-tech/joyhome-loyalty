@@ -536,7 +536,7 @@ onMounted(loadAll)
                 v-model.number="claim.amount"
                 type="number"
                 step="0.01"
-                min="10"
+                min="1"
                 required
                 class="w-full border-0 border-b border-fg/30 bg-transparent px-0 py-2 text-2xl text-fg focus:border-clover focus:outline-none focus:ring-0"
               />
@@ -544,7 +544,7 @@ onMounted(loadAll)
                 <span v-if="previewPoints > 0">
                   You'll earn <span class="text-clover">{{ previewPoints }} pts</span> once approved.
                 </span>
-                <span v-else>Receipt must be at least $10 to earn points.</span>
+                <span v-else>Receipt must be at least $1 to earn points.</span>
               </p>
             </div>
 
@@ -559,7 +559,7 @@ onMounted(loadAll)
 
             <div class="flex items-center justify-end gap-3 border-t border-surface-rim pt-5">
               <SecondaryButton type="button" @click="showClaim = false">Cancel</SecondaryButton>
-              <PrimaryButton :disabled="claimSubmitting || previewPoints < 1 || claimSuccess">
+              <PrimaryButton :disabled="claimSubmitting || previewPoints <= 0 || claimSuccess">
                 {{ claimSubmitting ? 'Submitting…' : 'Submit claim' }}
                 <span class="text-base">→</span>
               </PrimaryButton>

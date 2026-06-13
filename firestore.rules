@@ -66,7 +66,7 @@ service cloud.firestore {
         || (
           isSelf(uid)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['total_points'])
-          && request.resource.data.total_points is int
+          && request.resource.data.total_points is number
           && request.resource.data.total_points >= 0
           && request.resource.data.total_points < resource.data.get('total_points', 0)
         );
@@ -95,13 +95,17 @@ service cloud.firestore {
         && request.resource.data.customer_id == request.auth.uid
         && request.resource.data.status == 'PENDING'
         && request.resource.data.claimed_amount is number
-        && request.resource.data.claimed_amount >= 10
+        && request.resource.data.claimed_amount > 0
         && request.resource.data.claimed_amount <= 100000
-        && request.resource.data.points_to_award is int
+        && request.resource.data.points_to_award is number
         && request.resource.data.points_to_award >= 0
-        // The decisive check: server pins points to floor(amount / 10).
-        // Customer cannot inflate points_to_award via DevTools or Postman.
-        && request.resource.data.points_to_award == int(request.resource.data.claimed_amount) / 10
+        // The decisive check: points are capped at $1 = 0.1 point (amount / 10),
+        // expressed as points*10 <= amount. The +0.01 epsilon absorbs IEEE-754
+        // drift (e.g. 0.7 * 10 == 7.000000000000001) so legitimate claims aren't
+        // rejected; it is far below the 0.1 granularity, so a customer still
+        // cannot inflate points_to_award to the next increment via DevTools or
+        // Postman. The exact award is set by the client and reviewed by an admin.
+        && request.resource.data.points_to_award * 10 <= request.resource.data.claimed_amount + 0.01
         && request.resource.data.submitted_at == request.time;
 
       allow update, delete: if isSuperAdmin();

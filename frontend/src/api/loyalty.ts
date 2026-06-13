@@ -103,10 +103,23 @@ export interface Redemption {
 
 const POINTS_BATCH_EXPIRY_DAYS = 60
 
-/** $10 = 1 point, rounded down. Minimum claim $10. */
+/**
+ * $1 = 0.1 point (i.e. $10 = 1 point), counted per whole dollar — cents are
+ * ignored. Any receipt of $1 or more earns something; below $1 earns 0.
+ * e.g. $5 → 0.5, $12.99 → 1.2, $0.99 → 0.
+ */
 export function pointsFor(amountUsd: number): number {
-  if (amountUsd < 10) return 0
-  return Math.floor(amountUsd / 10)
+  if (!(amountUsd > 0)) return 0
+  return roundPts(Math.floor(amountUsd) / 10)
+}
+
+/**
+ * Snap a points value to 1-decimal granularity (the smallest unit is 0.1).
+ * Use on every balance write/read so floating-point sums (0.1 + 0.2 …) don't
+ * drift into long fractions.
+ */
+export function roundPts(n: number): number {
+  return Math.round((Number(n) || 0) * 10) / 10
 }
 
 /* ── Catalogue ─────────────────────────────────────────────────────────── */
@@ -127,8 +140,8 @@ export async function submitClaim(input: {
   claimed_amount: number
 }): Promise<string> {
   const points_to_award = pointsFor(input.claimed_amount)
-  if (points_to_award < 1) {
-    throw new Error('Receipt must be at least $10 to earn points.')
+  if (points_to_award <= 0) {
+    throw new Error('Receipt must be at least $1 to earn points.')
   }
   const ref = await addDoc(collection(db, 'claims'), {
     customer_id: input.customer_id,
@@ -211,10 +224,10 @@ export async function approveClaim(claimId: string, reviewerUid: string): Promis
     if (!customerSnap.exists()) {
       throw new Error('Customer profile not found for this claim.')
     }
-    const currentTotal = Math.trunc(
+    const currentTotal = roundPts(
       Number((customerSnap.data() as { total_points?: number }).total_points) || 0,
     )
-    const award = Math.trunc(Number(claim.points_to_award) || 0)
+    const award = roundPts(Number(claim.points_to_award) || 0)
 
     const now = new Date()
     const expiresAt = new Date(now)
@@ -238,7 +251,7 @@ export async function approveClaim(claimId: string, reviewerUid: string): Promis
       reviewed_at: serverTimestamp(),
     })
 
-    tx.update(customerRef, { total_points: currentTotal + award })
+    tx.update(customerRef, { total_points: roundPts(currentTotal + award) })
   })
 }
 
@@ -281,7 +294,7 @@ export async function listMyActiveBatches(uid: string): Promise<PointsBatch[]> {
 }
 
 export function totalPoints(batches: PointsBatch[]): number {
-  return batches.reduce((sum, b) => sum + (b.points || 0), 0)
+  return roundPts(batches.reduce((sum, b) => sum + (b.points || 0), 0))
 }
 
 /** The earliest expiry date across active batches — what to surface to the customer. */
@@ -298,7 +311,7 @@ export function availableBalance(batches: PointsBatch[], redemptions: Redemption
   const spent = redemptions
     .filter((r) => r.status !== 'CANCELED')
     .reduce((s, r) => s + (r.points_used || 0), 0)
-  return Math.max(0, earned - spent)
+  return Math.max(0, roundPts(earned - spent))
 }
 
 function generateOtp(): string {
@@ -458,7 +471,7 @@ export async function submitRedemption(input: {
     if (cost <= 0) {
       throw new Error('This reward is mis-priced. Please contact support.')
     }
-    const balance = Math.trunc(Number(customer.total_points) || 0)
+    const balance = roundPts(Number(customer.total_points) || 0)
     if (balance < cost) {
       throw new Error(
         `You don't have enough points: you have ${balance}, this reward costs ${cost}.`,
@@ -466,7 +479,7 @@ export async function submitRedemption(input: {
     }
 
     // Atomic: decrement counter and create the redemption together.
-    tx.update(customerRef, { total_points: balance - cost })
+    tx.update(customerRef, { total_points: roundPts(balance - cost) })
 
     const redemptionRef = doc(collection(db, 'redemptions'))
     const customerName = `${customer.first_name ?? ''} ${customer.last_name ?? ''}`.trim()
@@ -664,10 +677,10 @@ export async function cancelRedemption(id: string, adminUid: string): Promise<vo
     })
 
     if (customerSnap.exists() && refund > 0) {
-      const currentTotal = Math.trunc(
+      const currentTotal = roundPts(
         Number((customerSnap.data() as { total_points?: number }).total_points) || 0,
       )
-      tx.update(customerRef, { total_points: currentTotal + refund })
+      tx.update(customerRef, { total_points: roundPts(currentTotal + refund) })
     }
   })
 }
@@ -823,10 +836,10 @@ export async function adjustCustomerPoints(input: {
     if (!customerSnap.exists()) {
       throw new Error('Customer not found.')
     }
-    const currentTotal = Math.trunc(
+    const currentTotal = roundPts(
       Number((customerSnap.data() as { total_points?: number }).total_points) || 0,
     )
-    const newTotal = Math.max(0, currentTotal + delta)
+    const newTotal = Math.max(0, roundPts(currentTotal + delta))
 
     const now = new Date()
     const expiresAt = new Date(now)
@@ -885,7 +898,7 @@ export async function recalculateBalanceForCustomer(uid: string): Promise<number
       spent += Number(r.points_used) || 0
     }
   })
-  const total = Math.max(0, Math.trunc(earned - spent))
+  const total = Math.max(0, roundPts(earned - spent))
   await updateDoc(doc(db, 'customers', uid), { total_points: total })
   return total
 }
